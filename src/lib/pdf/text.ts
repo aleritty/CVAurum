@@ -347,11 +347,16 @@ export function extractRuns(node: Text, root: HTMLElement): TextRun[] {
   if (!segments.length) return []
 
   const href = parent.closest?.('a[href]')?.getAttribute('href') || undefined
-  // A keyword chip is ONE keyword however many lines it takes. Where its text
-  // wraps, the visible pieces become vector outlines and a single invisible
-  // run carries the whole phrase, so selecting or parsing the PDF yields
-  // "User Provisioning & Deprovisioning" rather than two fragments.
-  const wrappedChip = segments.length > 1 && !!parent.closest('.rm-chip')
+  // A keyword chip is ONE keyword, and a section heading ONE label, however
+  // many lines they take. Where such text wraps, the visible pieces become
+  // vector outlines and a single invisible run carries the whole phrase, so
+  // selecting or parsing the PDF yields "User Provisioning & Deprovisioning"
+  // and "Technical Skills & Core Competencies" rather than fragments.
+  //
+  // Body paragraphs are deliberately NOT included. They are MEANT to be many
+  // lines, nothing is lost by breaking them there, and painting every
+  // paragraph as outlines would trade real text rendering for nothing.
+  const wrappedUnit = segments.length > 1 && !!parent.closest('.rm-chip, .rm-section-title')
 
   const metrics = layoutMetricsFor(font)
   const runs: TextRun[] = []
@@ -373,10 +378,10 @@ export function extractRuns(node: Text, root: HTMLElement): TextRun[] {
       smallCapsScale,
       isDecorative: false,
       href,
-      outlineOnly: wrappedChip,
+      outlineOnly: wrappedUnit,
     })
   }
-  if (wrappedChip && runs.length) {
+  if (wrappedUnit && runs.length) {
     const whole = applyTextTransform(collapseWhitespace(data, cs.whiteSpace), cs.textTransform).trim()
     if (whole) runs.push({ ...runs[0], text: whole, outlineOnly: false, extractOnly: true })
   }

@@ -58,6 +58,28 @@
   min-width: 0;
   padding: var(--rm-pad);
 }
+/* Two-column gutter (2026-08-19). Both columns used to apply the FULL page
+   margin on their INNER edges, so the space between the two text blocks was
+   twice the page margin — measured at 98px against a 49px margin, while a
+   reference two-column résumé runs ~40px. That stole width from the narrow
+   sidebar (37% of its column went to padding, leaving skills to wrap after a
+   word or two) and read as a hole down the middle of the page. The inner
+   edges now share ONE gutter instead; outer edges keep the page margin. */
+.rm-body:not(.rm-single) {
+  --rm-gutter: calc(var(--rm-pad) * 0.8);
+}
+.side-left .rm-col-aside {
+  padding-right: calc(var(--rm-gutter) / 2);
+}
+.side-left .rm-col-main {
+  padding-left: calc(var(--rm-gutter) / 2);
+}
+.side-right .rm-col-aside {
+  padding-left: calc(var(--rm-gutter) / 2);
+}
+.side-right .rm-col-main {
+  padding-right: calc(var(--rm-gutter) / 2);
+}
 .rm-col-aside {
   flex: 0 0 var(--rm-aside-w, 34%);
   min-width: 0; /* never let content force the column (and page) wider */

@@ -58,6 +58,12 @@ export function BasicsEditor({ doc }: { doc: ResumeDocument }) {
         <TextField label="Region / State" value={b.location?.region ?? ''} onChange={(v) => update((c) => { c.basics.location = { ...c.basics.location, region: v } })} placeholder="CA" />
       </Row>
       <TextField label="Website" value={b.url ?? ''} onChange={(v) => update((c) => { c.basics.url = v })} placeholder="https://yoursite.com" />
+      <TextField
+        label="Website shown as"
+        value={b.urlLabel ?? ''}
+        onChange={(v) => update((c) => { c.basics.urlLabel = v })}
+        placeholder="Leave empty to show the address"
+      />
 
       <Profiles doc={doc} />
 
@@ -138,6 +144,16 @@ function Profiles({ doc }: { doc: ResumeDocument }) {
               placeholder="https://..."
               title="Link opened when clicked"
               onChange={(e) => update((c) => { c.basics.profiles![i].url = e.target.value })}
+            />
+            {/* What the reader SEES, kept apart from where the link goes.
+                Without it the displayed text was always derived from the
+                address, so showing "Portfolio" instead was impossible. */}
+            <input
+              className="input w-28"
+              value={p.label ?? ''}
+              placeholder="Shown as"
+              title="Text shown instead of the address - leave empty to show the address"
+              onChange={(e) => update((c) => { c.basics.profiles![i].label = e.target.value })}
             />
             <button
               type="button"

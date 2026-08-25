@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { PDFDict, PDFDocument, PDFName, PDFString } from 'pdf-lib'
+import { PDFDict, PDFDocument, PDFName } from 'pdf-lib'
 import * as fontkitNs from '@pdf-lib/fontkit'
 import type { Font as FontkitFont } from '@pdf-lib/fontkit'
 import {
@@ -1716,19 +1716,6 @@ describe('paintOps — tagged PDF marked content', () => {
       { pageIndex: 0, mcid: 0, role: 'P' },
       { pageIndex: 1, mcid: 0, role: 'P' },
     ])
-  })
-})
-
-describe('paintOps — <a href> runs become clickable Link annotations (bug: links in rich text were dead in exported PDFs)', () => {
-  it('adds a URI Link annotation over an href run, and none for a plain run', async () => {
-    const { page } = await renderPage([
-      { kind: 'text', run: baseRun({ text: 'Plain text' }), role: 'P' },
-      { kind: 'text', run: baseRun({ text: 'my site', href: 'https://example.com' }), role: 'P' },
-    ])
-    const annots = (page.node.Annots()?.asArray() ?? []).map((ref) => page.doc.context.lookup(ref, PDFDict))
-    expect(annots).toHaveLength(1)
-    const action = annots[0].lookup(PDFName.of('A'), PDFDict)
-    expect(action.lookup(PDFName.of('URI'), PDFString).asString()).toBe('https://example.com')
   })
 })
 

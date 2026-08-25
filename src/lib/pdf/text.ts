@@ -525,7 +525,6 @@ export function extractRuns(node: Text, root: HTMLElement): TextRun[] {
   const segments = textNodeLineSegments(node)
   if (!segments.length) return []
 
-  const href = parent.closest?.('a[href]')?.getAttribute('href') || undefined
   const metrics = layoutMetricsFor(font)
   // Only the first line can carry the space that precedes the node.
   const lead = leadingSpaceRect(node, cs)
@@ -552,7 +551,6 @@ export function extractRuns(node: Text, root: HTMLElement): TextRun[] {
       letterSpacingPx: cs.letterSpacing === 'normal' ? 0 : parsePx(cs.letterSpacing),
       smallCapsScale,
       isDecorative: false,
-      href,
     })
   }
 

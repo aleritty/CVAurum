@@ -55,12 +55,12 @@ function singleDate(edit: EditFn | undefined, visible: boolean, date: string, ap
 
 type ProfStyle = 'dots' | 'bars' | 'stars' | 'text' | 'none'
 
-/** Render a 0–5 rating as the chosen meter (only for meter styles). */
-function Proficiency({ rating, style }: { rating?: number; style: ProfStyle }) {
+/** Render a 0–max rating as the chosen meter (only for meter styles). */
+function Proficiency({ rating, style, max = 5 }: { rating?: number; style: ProfStyle; max?: number }) {
   if (rating == null) return null
-  if (style === 'stars') return <Stars value={rating} />
-  if (style === 'bars') return <LevelBar value={rating} />
-  return <Dots value={rating} />
+  if (style === 'stars') return <Stars value={rating} max={max} />
+  if (style === 'bars') return <LevelBar value={rating} max={max} />
+  return <Dots value={rating} max={max} />
 }
 
 function Bullets({
@@ -642,7 +642,7 @@ function Languages({ doc, edit, opts }: { doc: ResumeDocument; config: TemplateC
   const prof = (opts?.meterStyle ?? doc.metadata.typography.proficiency) as ProfStyle
   const meter = prof === 'dots' || prof === 'bars' || prof === 'stars'
   return (
-    <>
+    <div className="rm-levels">
       {doc.content.languages.map((l, i) => {
         if (!edit && !anyText(l.language)) return null
         return (
@@ -654,7 +654,7 @@ function Languages({ doc, edit, opts }: { doc: ResumeDocument; config: TemplateC
               ) : (
                 <span className="rm-mini-title">{l.language}</span>
               )}
-              <Proficiency rating={l.rating} style={prof} />
+              <Proficiency rating={l.rating} style={prof} max={6} />
             </div>
           ) : (
             <div className="rm-item-head">
@@ -666,7 +666,7 @@ function Languages({ doc, edit, opts }: { doc: ResumeDocument; config: TemplateC
         </div>
         )
       })}
-    </>
+    </div>
   )
 }
 

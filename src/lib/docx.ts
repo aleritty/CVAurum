@@ -127,13 +127,13 @@ function richToBlocks(html: string, color: string): TextRun[][] {
   return blocks
 }
 
-/** 0–5 rating → filled/empty unicode glyphs in the column colors. */
-function meterRuns(rating: number, style: string, filled: string, empty: string): TextRun[] {
+/** 0–max rating → filled/empty unicode glyphs in the column colors. */
+function meterRuns(rating: number, style: string, filled: string, empty: string, max = 5): TextRun[] {
   const pair = style === 'stars' ? ['★', '☆'] : style === 'bars' ? ['▰', '▱'] : ['●', '○']
   const out: TextRun[] = []
-  const r = Math.max(0, Math.min(5, Math.round(rating)))
+  const r = Math.max(0, Math.min(max, Math.round(rating)))
   if (r > 0) out.push(new TextRun({ text: pair[0].repeat(r), color: filled, size: SIZE.body }))
-  if (5 - r > 0) out.push(new TextRun({ text: pair[1].repeat(5 - r), color: empty, size: SIZE.body }))
+  if (max - r > 0) out.push(new TextRun({ text: pair[1].repeat(max - r), color: empty, size: SIZE.body }))
   return out
 }
 
@@ -244,7 +244,7 @@ function buildSections(keys: string[], doc: ResumeDocument, C: Ctx, width: numbe
       out.push(heading(label, C))
       for (const l of content.languages) {
         if (typeof l.rating === 'number' && meter) {
-          out.push(new Paragraph({ spacing: { after: 28 }, children: [new TextRun({ text: `${l.language}\t`, bold: true, color: C.body, size: SIZE.body }), ...meterRuns(l.rating, C.prof, C.accent, C.muted)], tabStops: [{ type: TabStopType.RIGHT, position: width }] }))
+          out.push(new Paragraph({ spacing: { after: 28 }, children: [new TextRun({ text: `${l.language}\t`, bold: true, color: C.body, size: SIZE.body }), ...meterRuns(l.rating, C.prof, C.accent, C.muted, 6)], tabStops: [{ type: TabStopType.RIGHT, position: width }] }))
         } else {
           const kids: ParagraphChild[] = [new TextRun({ text: l.language || '', bold: true, color: C.body, size: SIZE.body })]
           if (l.fluency && C.prof !== 'none') kids.push(new TextRun({ text: `  —  ${l.fluency}`, color: C.muted, size: SIZE.sub }))

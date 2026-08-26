@@ -864,8 +864,15 @@
 .tpl-clarity .rm-col-aside {
   border-left: 1px solid #e3e7ee;
 }
-/* dotted separators between entries (main column) */
-.tpl-clarity .rm-col-main .rm-section-body > .rm-item + .rm-item {
+/* the profile photo sits directly above the first aside section with no gap
+   of its own — give it one so that section doesn't crowd the photo. */
+.tpl-clarity .rm-col-aside .rm-photo {
+  margin-bottom: 1rem;
+}
+/* dotted separators between entries (main column) — skipped in grid layout,
+   where entries sit side by side and a top rule would only hit some cells,
+   leaving the first entry looking inconsistent with the rest */
+.tpl-clarity .rm-col-main .rm-section:not(.lay-ov-grid) .rm-section-body > .rm-item + .rm-item {
   border-top: 1px dotted color-mix(in srgb, var(--rm-muted) 55%, transparent);
   padding-top: calc(var(--rm-item-gap) * 0.9);
 }

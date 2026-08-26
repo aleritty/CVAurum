@@ -105,7 +105,7 @@ export function DesignPanel({ doc }: { doc: ResumeDocument }) {
             ]}
             onChange={(v) => update((md) => { md.typography.proficiency = v })}
           />
-          <p className="-mt-1 text-[11px] text-muted-foreground">How the 0–5 rating on skills &amp; languages is shown.</p>
+          <p className="-mt-1 text-[11px] text-muted-foreground">How the 0–5 rating on skills (0–6 for languages) is shown.</p>
         </div>
       </FieldGroup>
 

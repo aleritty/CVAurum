@@ -1,17 +1,38 @@
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings2, EyeOff, ArrowLeftRight, Copy, ClipboardPaste, Paintbrush, X } from 'lucide-react'
+import {
+  Settings2,
+  EyeOff,
+  ArrowLeftRight,
+  ArrowDownToLine,
+  ArrowUp,
+  ArrowDown,
+  GripVertical,
+  Copy,
+  ClipboardPaste,
+  Paintbrush,
+  X,
+} from 'lucide-react'
 import { useEditorStore } from '@/store/useEditorStore'
 import { usePopoverA11y } from './popoverA11y'
 import type { ResumeDocument } from '@/types/document'
 import type { Metadata } from '@/types/metadata'
-import { sectionLabel } from '@/lib/sections'
+import { sectionLabel, moveSection, moveSectionTo } from '@/lib/sections'
 import type { MetaEditFn } from './Editable'
 
 type ToggleField = 'showBullets' | 'showDates' | 'showLocation' | 'showSummary' | 'showKeywords' | 'showBadges'
 
 /** The visual-style fields the painter copies (NOT the show* content toggles). */
-const STYLE_FIELDS = ['headingStyle', 'skillsStyle', 'entryLayout', 'scoreStyle', 'bulletStyle', 'meterStyle', 'badgeSize', 'badgeShape'] as const
+const STYLE_FIELDS = [
+  'headingStyle',
+  'skillsStyle',
+  'entryLayout',
+  'scoreStyle',
+  'bulletStyle',
+  'meterStyle',
+  'badgeSize',
+  'badgeShape',
+] as const
 
 /** Per-section heading treatments ('' = the template's own default). */
 const HEADING_STYLES: { label: string; value: string }[] = [
@@ -122,8 +143,14 @@ function Mini({ kind }: { kind: string }) {
     case 's:tags':
       return (
         <span className="flex w-8 gap-[4px]">
-          <span className="flex flex-col gap-[2px]"><span className={`h-[3px] w-3 ${t}`} /><span className="h-px w-full bg-foreground/50" /></span>
-          <span className="flex flex-col gap-[2px]"><span className={`h-[3px] w-2.5 ${t}`} /><span className="h-px w-full bg-foreground/50" /></span>
+          <span className="flex flex-col gap-[2px]">
+            <span className={`h-[3px] w-3 ${t}`} />
+            <span className="h-px w-full bg-foreground/50" />
+          </span>
+          <span className="flex flex-col gap-[2px]">
+            <span className={`h-[3px] w-2.5 ${t}`} />
+            <span className="h-px w-full bg-foreground/50" />
+          </span>
         </span>
       )
     case 's:inline':
@@ -188,8 +215,12 @@ function Mini({ kind }: { kind: string }) {
     case 'e:cards':
       return (
         <span className="flex w-8 flex-col gap-[3px]">
-          <span className="flex h-[8px] items-center rounded-[2px] border border-foreground/30 px-[3px]"><span className={`h-[2.5px] w-3 ${t}`} /></span>
-          <span className="flex h-[8px] items-center rounded-[2px] border border-foreground/30 px-[3px]"><span className={`h-[2.5px] w-2.5 ${t}`} /></span>
+          <span className="flex h-[8px] items-center rounded-[2px] border border-foreground/30 px-[3px]">
+            <span className={`h-[2.5px] w-3 ${t}`} />
+          </span>
+          <span className="flex h-[8px] items-center rounded-[2px] border border-foreground/30 px-[3px]">
+            <span className={`h-[2.5px] w-2.5 ${t}`} />
+          </span>
         </span>
       )
     case 'e:grid':
@@ -219,7 +250,16 @@ const NO_ENTRY_LAYOUT = new Set(['summary', 'skills', 'languages'])
 const NO_BADGES = new Set(['certificates', 'awards', 'publications', 'interests', 'references'])
 
 const HAS_BULLETS = new Set(['work', 'projects', 'volunteer', 'custom'])
-const HAS_DATES = new Set(['work', 'education', 'projects', 'volunteer', 'certificates', 'awards', 'publications', 'custom'])
+const HAS_DATES = new Set([
+  'work',
+  'education',
+  'projects',
+  'volunteer',
+  'certificates',
+  'awards',
+  'publications',
+  'custom',
+])
 const HAS_LOCATION = new Set(['work', 'education', 'custom'])
 const HAS_SUMMARY = new Set(['work'])
 
@@ -257,7 +297,15 @@ const POP_W = 308 // popover width (px) — must match w-[308px] below
  * Desktop: a floating panel clamped fully on-screen with its own scroll area.
  * Phones: a bottom sheet (floating panels are unusable at that size).
  */
-export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string; doc: ResumeDocument; editMeta: MetaEditFn }) {
+export function SectionGear({
+  sectionKey,
+  doc,
+  editMeta,
+}: {
+  sectionKey: string
+  doc: ResumeDocument
+  editMeta: MetaEditFn
+}) {
   const [open, setOpen] = useState(false)
   // sheet=true → phone bottom-sheet; otherwise a clamped floating panel.
   const [pos, setPos] = useState({ top: 0, left: 0, maxH: 600, sheet: false })
@@ -270,6 +318,11 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
   const opts = layout.sectionSettings?.[sectionKey] ?? {}
   const twoCol = layout.columns === 2
   const inAside = layout.aside.includes(sectionKey)
+  // Meter style only ever does anything for a skill group that has a rating
+  // (sections.tsx Skills() now meters ANY rated group, keywords or not) — flag
+  // it here so the popover can say so instead of silently doing nothing when
+  // no group has a level set yet.
+  const skillsHaveRatedGroup = base !== 'skills' || doc.content.skills.some((s) => typeof s.rating === 'number')
 
   // Keep the panel usable if the window changes underneath it.
   useEffect(() => {
@@ -289,7 +342,18 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
     })
 
   // Per-section style overrides — applied live on the canvas as you click.
-  const setStyle = (field: 'headingStyle' | 'skillsStyle' | 'entryLayout' | 'scoreStyle' | 'bulletStyle' | 'meterStyle' | 'badgeSize' | 'badgeShape', value?: string) =>
+  const setStyle = (
+    field:
+      | 'headingStyle'
+      | 'skillsStyle'
+      | 'entryLayout'
+      | 'scoreStyle'
+      | 'bulletStyle'
+      | 'meterStyle'
+      | 'badgeSize'
+      | 'badgeShape',
+    value?: string
+  ) =>
     editMeta((m) => {
       if (!m.layout.sectionSettings) m.layout.sectionSettings = {}
       const cur = { ...(m.layout.sectionSettings[sectionKey] ?? {}) }
@@ -303,13 +367,40 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
       if (!m.layout.hidden.includes(sectionKey)) m.layout.hidden.push(sectionKey)
     })
 
+  // "Start on new page" pin (2026-08-17 spec section 1): a section-level
+  // forced page break, resolved identically by the export and the preview
+  // (metadata.page.breaks). Auto-fit ON means "one page, let the engine
+  // decide", so pinning is only offered with it off.
+  const autoFitOn = doc.metadata.page.autoFit
+  const pinned = doc.metadata.page.breaks.some((b) => b.section === sectionKey && !b.itemId)
+  const togglePin = () =>
+    editMeta((m) => {
+      const cur = m.page.breaks
+      const idx = cur.findIndex((b) => b.section === sectionKey && !b.itemId)
+      if (idx >= 0) cur.splice(idx, 1)
+      else cur.push({ section: sectionKey })
+    })
+
   const move = () =>
     editMeta((m) => {
-      const from: 'main' | 'aside' = m.layout.main.includes(sectionKey) ? 'main' : 'aside'
-      const to: 'main' | 'aside' = from === 'main' ? 'aside' : 'main'
-      m.layout[from] = m.layout[from].filter((k) => k !== sectionKey)
-      m.layout[to] = [...m.layout[to], sectionKey]
+      const to: 'main' | 'aside' = m.layout.main.includes(sectionKey) ? 'aside' : 'main'
+      moveSectionTo(m.layout, sectionKey, to, m.layout[to].length)
     })
+
+  // Inline reordering (2026-08-17 inline-reorder spec): arrows move one step
+  // within this section's column via the same shared helper every control
+  // surface uses. Position for the disabled state comes straight from the
+  // layout arrays; a content-appended key missing from both sits at the
+  // visual end of main, so only its up-arrow is live.
+  const colArr = layout.main.includes(sectionKey)
+    ? layout.main
+    : layout.aside.includes(sectionKey)
+      ? layout.aside
+      : null
+  const colIdx = colArr ? colArr.indexOf(sectionKey) : -1
+  const atTop = colArr ? colIdx === 0 : false
+  const atBottom = colArr ? colIdx === colArr.length - 1 : true
+  const moveStep = (dir: -1 | 1) => editMeta((m) => moveSection(m.layout, sectionKey, dir))
 
   // Style painter: copy this section's visual style, then paint it onto another
   // section (or all of them) — like Figma's paint-format. Only the visual-style
@@ -363,21 +454,98 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
   if (HAS_LOCATION.has(base)) rows.push({ label: 'Location', field: 'showLocation' })
   if (HAS_SUMMARY.has(base)) rows.push({ label: 'Role summary', field: 'showSummary' })
   if (HAS_KEYWORDS.has(base)) rows.push({ label: 'Tech tags', field: 'showKeywords' })
-  if (!NO_ENTRY_LAYOUT.has(base) && !NO_BADGES.has(base)) rows.push({ label: 'Entry badges (initial)', field: 'showBadges' })
+  if (!NO_ENTRY_LAYOUT.has(base) && !NO_BADGES.has(base))
+    rows.push({ label: 'Entry badges (initial)', field: 'showBadges' })
 
   return (
     <>
-      <button
-        type="button"
-        className="rm-section-gear no-print"
-        contentEditable={false}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={openPopover}
-        title="Style & settings for this section"
-        aria-label="Section style and settings"
-      >
-        <Settings2 /> Style
-      </button>
+      <div className="rm-section-controls no-print">
+        {/* Canvas drag grip — the session logic lives in CanvasReorder.tsx
+            (document-level listeners find it via data-canvas-drag). */}
+        <button
+          type="button"
+          className="rm-section-hide rm-section-move rm-section-grip"
+          contentEditable={false}
+          data-canvas-drag="section"
+          style={{ touchAction: 'none' }}
+          title="Drag to reorder section (or use the arrows)"
+          aria-label="Drag to reorder section"
+        >
+          <GripVertical />
+        </button>
+        <button
+          type="button"
+          className="rm-section-gear"
+          contentEditable={false}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={openPopover}
+          title="Style & settings for this section"
+          aria-label="Section style and settings"
+        >
+          <Settings2 /> Style
+        </button>
+        <button
+          type="button"
+          className="rm-section-hide rm-section-move"
+          contentEditable={false}
+          disabled={atTop}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => moveStep(-1)}
+          title="Move section up"
+          aria-label="Move section up"
+        >
+          <ArrowUp />
+        </button>
+        <button
+          type="button"
+          className="rm-section-hide rm-section-move"
+          contentEditable={false}
+          disabled={atBottom}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => moveStep(1)}
+          title="Move section down"
+          aria-label="Move section down"
+        >
+          <ArrowDown />
+        </button>
+        {twoCol && (
+          <button
+            type="button"
+            className="rm-section-hide rm-section-move"
+            contentEditable={false}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={move}
+            title={inAside ? 'Move to the main column' : 'Move to the side column'}
+            aria-label={inAside ? 'Move section to the main column' : 'Move section to the side column'}
+          >
+            <ArrowLeftRight />
+          </button>
+        )}
+        <button
+          type="button"
+          className="rm-section-hide"
+          contentEditable={false}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={hide}
+          title="Hide section (restore from Sections panel)"
+          aria-label="Hide section"
+        >
+          <EyeOff />
+        </button>
+        {pinned && !autoFitOn && (
+          <button
+            type="button"
+            className="rm-section-gear"
+            contentEditable={false}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={togglePin}
+            title="Starts on a new page — click to unpin"
+            aria-label="Unpin page break"
+          >
+            <ArrowDownToLine /> New page
+          </button>
+        )}
+      </div>
       {open &&
         createPortal(
           <>
@@ -399,7 +567,9 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold leading-tight">{sectionLabel(sectionKey, doc)}</div>
-                  <div className="text-[10.5px] uppercase tracking-wide text-muted-foreground">Style &amp; settings</div>
+                  <div className="text-[10.5px] uppercase tracking-wide text-muted-foreground">
+                    Style &amp; settings
+                  </div>
                 </div>
                 <button className="btn-icon h-7 w-7 shrink-0" onClick={() => setOpen(false)} aria-label="Close">
                   <X className="h-4 w-4" />
@@ -421,12 +591,31 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
                   </Group>
                 )}
 
+                {/* Page pin — force this section to start a new page (spec 1).
+                    With auto-fit on, pagination isn't user-controlled, so the
+                    row explains instead of offering a dead toggle. */}
+                <Group label="Page">
+                  {autoFitOn ? (
+                    <p className="px-2 py-1 text-[11px] leading-snug text-muted-foreground">
+                      Turn off “Fit to one page” (Design panel) to pin page breaks.
+                    </p>
+                  ) : (
+                    <ToggleRow label="Start on new page" on={pinned} onClick={togglePin} />
+                  )}
+                </Group>
+
                 {/* Bullet marker — per-section override of the global bullet style */}
                 {HAS_BULLETS.has(base) && opts.showBullets !== false && (
                   <Group label="Bullet style">
                     <div className="grid grid-cols-5 gap-1">
                       {BULLET_CHOICES.map((b) => (
-                        <ChipBtn key={b.v || 'auto'} label={b.label} title={b.title} on={(opts.bulletStyle ?? '') === b.v} onClick={() => setStyle('bulletStyle', b.v)} />
+                        <ChipBtn
+                          key={b.v || 'auto'}
+                          label={b.label}
+                          title={b.title}
+                          on={(opts.bulletStyle ?? '') === b.v}
+                          onClick={() => setStyle('bulletStyle', b.v)}
+                        />
                       ))}
                     </div>
                   </Group>
@@ -437,9 +626,20 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
                   <Group label="Meter style">
                     <div className="grid grid-cols-3 gap-1">
                       {METER_CHOICES.map((b) => (
-                        <ChipBtn key={b.v || 'auto'} label={b.label} title={b.title} on={(opts.meterStyle ?? '') === b.v} onClick={() => setStyle('meterStyle', b.v)} />
+                        <ChipBtn
+                          key={b.v || 'auto'}
+                          label={b.label}
+                          title={b.title}
+                          on={(opts.meterStyle ?? '') === b.v}
+                          onClick={() => setStyle('meterStyle', b.v)}
+                        />
                       ))}
                     </div>
+                    {!skillsHaveRatedGroup && (
+                      <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+                        Set a level on a skill group (side panel) to show meters
+                      </p>
+                    )}
                   </Group>
                 )}
 
@@ -456,11 +656,18 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
                           { v: 'm', label: 'M' },
                           { v: 'l', label: 'L' },
                         ].map((b) => (
-                          <ChipBtn key={b.v || 'auto'} label={b.label} on={(opts.badgeSize ?? '') === b.v} onClick={() => setStyle('badgeSize', b.v)} />
+                          <ChipBtn
+                            key={b.v || 'auto'}
+                            label={b.label}
+                            on={(opts.badgeSize ?? '') === b.v}
+                            onClick={() => setStyle('badgeSize', b.v)}
+                          />
                         ))}
                       </div>
                       <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
-                        To add a company / school mark: hover an entry on the page and click the <span className="font-medium text-primary">+ Logo</span> chip beside its title (or use the entry&apos;s form in the Content panel).
+                        To add a company / school mark: hover an entry on the page and click the{' '}
+                        <span className="font-medium text-primary">+ Logo</span> chip beside its title (or use the
+                        entry&apos;s form in the Content panel).
                       </p>
                     </Group>
                     <Group label="Logo & badge shape">
@@ -471,7 +678,13 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
                           { v: 'circle', label: '◯', title: 'Circle' },
                           { v: 'square', label: '□', title: 'Square' },
                         ].map((b) => (
-                          <ChipBtn key={b.v || 'auto'} label={b.label} title={b.title} on={(opts.badgeShape ?? '') === b.v} onClick={() => setStyle('badgeShape', b.v)} />
+                          <ChipBtn
+                            key={b.v || 'auto'}
+                            label={b.label}
+                            title={b.title}
+                            on={(opts.badgeShape ?? '') === b.v}
+                            onClick={() => setStyle('badgeShape', b.v)}
+                          />
                         ))}
                       </div>
                     </Group>
@@ -546,7 +759,9 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
 
                 <div className="my-1.5 h-px bg-border" />
                 <div className="px-2 pb-1 pt-0.5">
-                  <div className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">Style painter</div>
+                  <div className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Style painter
+                  </div>
                   <p className="text-[11px] leading-snug text-muted-foreground">
                     {copiedStyle
                       ? 'Style copied — Paste it here, or paint it onto All sections at once.'
@@ -572,7 +787,10 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
                       </button>
                       <button
                         className="flex items-center justify-center gap-1.5 rounded-md border border-primary/40 bg-primary/10 px-2 py-1.5 text-xs font-medium text-primary hover:bg-primary/15"
-                        onClick={() => { paintAll(); setOpen(false) }}
+                        onClick={() => {
+                          paintAll()
+                          setOpen(false)
+                        }}
                         title="Paint the copied style onto every section"
                       >
                         <Paintbrush className="h-3.5 w-3.5" /> All
@@ -584,21 +802,27 @@ export function SectionGear({ sectionKey, doc, editMeta }: { sectionKey: string;
                 {twoCol && (
                   <button
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted"
-                    onClick={() => { move(); setOpen(false) }}
+                    onClick={() => {
+                      move()
+                      setOpen(false)
+                    }}
                   >
                     <ArrowLeftRight className="h-4 w-4" /> Move to {inAside ? 'main column' : 'sidebar'}
                   </button>
                 )}
                 <button
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-danger hover:bg-danger/10"
-                  onClick={() => { hide(); setOpen(false) }}
+                  onClick={() => {
+                    hide()
+                    setOpen(false)
+                  }}
                 >
                   <EyeOff className="h-4 w-4" /> Hide section
                 </button>
               </div>
             </div>
           </>,
-          document.body,
+          document.body
         )}
     </>
   )
@@ -623,7 +847,9 @@ function ChipBtn({ label, title, on, onClick }: { label: string; title?: string;
       aria-pressed={on}
       onClick={onClick}
       className={`min-w-0 truncate rounded-md border px-1 py-1.5 text-xs font-medium transition ${
-        on ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:border-primary/50 hover:text-foreground'
+        on
+          ? 'border-primary bg-primary/10 text-primary'
+          : 'border-border text-muted-foreground hover:border-primary/50 hover:text-foreground'
       }`}
     >
       {label}
@@ -646,17 +872,31 @@ function StyleChip({ label, kind, on, onClick }: { label: string; kind: string; 
       <span className="flex h-5 w-full items-center justify-center">
         <Mini kind={kind} />
       </span>
-      <span className={`w-full truncate text-center text-[9px] font-medium leading-none ${on ? 'text-primary' : 'text-muted-foreground'}`}>{label}</span>
+      <span
+        className={`w-full truncate text-center text-[9px] font-medium leading-none ${on ? 'text-primary' : 'text-muted-foreground'}`}
+      >
+        {label}
+      </span>
     </button>
   )
 }
 
 function ToggleRow({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
   return (
-    <button type="button" role="switch" aria-checked={on} onClick={onClick} className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-muted">
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      onClick={onClick}
+      className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm hover:bg-muted"
+    >
       <span className="truncate">{label}</span>
-      <span className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${on ? 'bg-primary' : 'bg-muted-foreground/30'}`}>
-        <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-all ${on ? 'left-[14px]' : 'left-0.5'}`} />
+      <span
+        className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${on ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+      >
+        <span
+          className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-all ${on ? 'left-[14px]' : 'left-0.5'}`}
+        />
       </span>
     </button>
   )

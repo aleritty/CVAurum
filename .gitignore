@@ -23,3 +23,10 @@ pnpm-debug.log*
 /*.pdf
 /*.docx
 /*_Resume_*.json
+
+# SDD scratch (subagent-driven development workspace)
+.superpowers/
+
+# internal process docs - kept locally, never published
+docs/superpowers/
+docs/PDF-RENDERER.md

@@ -7,10 +7,11 @@
  */
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode, type FocusEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { Trash2 } from 'lucide-react'
 import type { ResumeDocument } from '@/types/document'
 import type { TemplateConfig } from '@/types/template'
 import { formatDateRange, formatDate, htmlToText, safeHref } from '@/lib/utils'
-import { pushNewItem, ADD_LABEL } from '@/lib/sections'
+import { pushNewItem, removeItem, sectionHasContent, entryBadgeOn, ADD_LABEL } from '@/lib/sections'
 import { Chips, Dots, LevelBar, Stars, RichText, prettyUrl } from './atoms'
 import { Ed, type EditFn } from './Editable'
 import { CanvasDate } from './CanvasDate'
@@ -288,6 +289,30 @@ function ItemHead({ title, date, badge, logo, edit, setLogo }: { title: ReactNod
 }
 
 /**
+ * On-canvas item delete (edit mode only): a small ghost trash button that sits
+ * in the item's right gutter, revealed on hover/focus. Splices the item out via
+ * the SAME store mutation the side panel's Trash2 delete uses — see removeItem
+ * in lib/sections.ts — so there's one splice-by-id implementation, not two.
+ * Never rendered in print/thumbnail (no `edit` there).
+ */
+function ItemDelete({ edit, sectionKey, id, label }: { edit?: EditFn; sectionKey: string; id?: string; label: string }) {
+  if (!edit || !id) return null
+  return (
+    <button
+      type="button"
+      className="rm-item-del no-print"
+      contentEditable={false}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => edit((c) => removeItem(c, sectionKey, id))}
+      aria-label={`Remove ${label}`}
+      title={`Remove ${label}`}
+    >
+      <Trash2 />
+    </button>
+  )
+}
+
+/**
  * Inline-editable keyword chips on the canvas (skills, etc.). Mirrors Bullets:
  * each chip is editable text + an × to remove, with a "+" to add, blank chips
  * pruned when focus leaves. Without `edit` it renders plain, print-clean chips.
@@ -343,6 +368,7 @@ function EditableChips({
             value={k}
             apply={(c, v) => setItem?.(c, ki, v)}
             placeholder={placeholder}
+            spellCheck={false}
             onEnter={onAdd ? () => { pendingFocus.current = items.length; onAdd() } : undefined}
           />
           {onRemove && (
@@ -404,9 +430,9 @@ function Work({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; opts?: 
       {doc.content.work.map((w, i) => {
         if (!edit && !anyText(w.position, w.name, w.summary, w.highlights)) return null
         return (
-        <article className={`rm-item rm-keep${markClass(w.logo, opts?.showBadges ? badgeLetter(w.name || w.position) : undefined)}`} key={w.id}>
+        <article className={`rm-item rm-keep${markClass(w.logo, entryBadgeOn(w, opts) ? badgeLetter(w.name || w.position) : undefined)}`} key={w.id} data-item-id={w.id}>
           <ItemHead
-            badge={opts?.showBadges ? badgeLetter(w.name || w.position) : undefined}
+            badge={entryBadgeOn(w, opts) ? badgeLetter(w.name || w.position) : undefined}
             logo={w.logo}
             edit={edit}
             setLogo={(c, v) => { c.work[i].logo = v }}
@@ -433,6 +459,7 @@ function Work({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; opts?: 
               onPruneEmpty={edit ? () => edit((c) => { c.work[i].highlights = c.work[i].highlights.filter((h) => htmlToText(h).trim().length > 0) }) : undefined}
             />
           ) : null}
+          <ItemDelete edit={edit} sectionKey="work" id={w.id} label={ADD_LABEL.work} />
         </article>
         )
       })}
@@ -447,9 +474,9 @@ function Education({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
         if (!edit && !anyText(e.institution, e.area, e.studyType)) return null
         const title = [e.studyType, e.area].filter(Boolean).join(', ') || e.institution
         return (
-          <article className={`rm-item rm-keep${markClass(e.logo, opts?.showBadges ? badgeLetter(e.institution || e.area) : undefined)}`} key={e.id}>
+          <article className={`rm-item rm-keep${markClass(e.logo, entryBadgeOn(e, opts) ? badgeLetter(e.institution || e.area) : undefined)}`} key={e.id} data-item-id={e.id}>
             <ItemHead
-            badge={opts?.showBadges ? badgeLetter(e.institution || e.area) : undefined}
+            badge={entryBadgeOn(e, opts) ? badgeLetter(e.institution || e.area) : undefined}
             logo={e.logo}
             edit={edit}
             setLogo={(c, v) => { c.education[i].logo = v }}
@@ -476,6 +503,7 @@ function Education({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
             </div>
             {has(e.summary) ? <RichText html={e.summary} /> : null}
             {e.courses?.length ? <div className="rm-skill-inline">{e.courses.join(' · ')}</div> : null}
+            <ItemDelete edit={edit} sectionKey="education" id={e.id} label={ADD_LABEL.education} />
           </article>
         )
       })}
@@ -489,7 +517,7 @@ function Projects({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; opt
       {doc.content.projects.map((p, i) => {
         if (!edit && !anyText(p.name, p.description, p.highlights)) return null
         return (
-        <article className={`rm-item rm-keep${markClass(undefined, opts?.showBadges ? badgeLetter(p.name) : undefined)}`} key={p.id}>
+        <article className={`rm-item rm-keep${markClass(undefined, opts?.showBadges ? badgeLetter(p.name) : undefined)}`} key={p.id} data-item-id={p.id}>
           <ItemHead
             badge={opts?.showBadges ? badgeLetter(p.name) : undefined}
             title={edit ? <Ed edit={edit} value={p.name} apply={(c, v) => { c.projects[i].name = v }} placeholder="Project name" /> : safeHref(p.url) ? <a href={safeHref(p.url)}>{p.name}</a> : p.name}
@@ -532,6 +560,7 @@ function Projects({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; opt
               />
             ) : p.keywords?.length ? <Chips items={p.keywords} /> : null
           ) : null}
+          <ItemDelete edit={edit} sectionKey="projects" id={p.id} label={ADD_LABEL.projects} />
         </article>
         )
       })}
@@ -552,18 +581,39 @@ function Skills({ doc, config, edit, opts }: { doc: ResumeDocument; config: Temp
         const hasKeywords = s.keywords && s.keywords.length > 0
         if (!hasKeywords && typeof s.rating === 'number' && meter) {
           return (
-            <div className="rm-skill-group" key={s.id}>
+            <div className="rm-skill-group" key={s.id} data-item-id={s.id}>
               <div className="rm-level">
-                <span className="rm-skill-group-name" style={{ minWidth: '40%' }}>{s.name}</span>
+                <span className="rm-skill-group-name">{s.name}</span>
                 <Proficiency rating={s.rating} style={prof} />
               </div>
+              <ItemDelete edit={edit} sectionKey="skills" id={s.id} label={ADD_LABEL.skills} />
             </div>
           )
         }
         const chipStyle = style === 'chips' || style === 'grouped-chips' || style === 'bars' || style === 'dots'
+        // A group can carry BOTH a rating and keywords (the common case: user
+        // sets a level in the side panel on a chip group). Meter still applies —
+        // it just gets the keywords rendered below it instead of standing alone.
+        const showMeter = meter && typeof s.rating === 'number'
+        const nameEl = s.name || edit ? (
+          <Ed
+            edit={edit}
+            value={s.name}
+            apply={(c, v) => { c.skills[i].name = v }}
+            className="rm-skill-group-name"
+            placeholder="Category"
+          />
+        ) : null
         return (
-          <div className="rm-skill-group" key={s.id}>
-            {s.name || edit ? <Ed edit={edit} value={s.name} apply={(c, v) => { c.skills[i].name = v }} className="rm-skill-group-name" placeholder="Category" /> : null}
+          <div className="rm-skill-group" key={s.id} data-item-id={s.id}>
+            {showMeter ? (
+              <div className="rm-level">
+                {nameEl}
+                <Proficiency rating={s.rating} style={prof} />
+              </div>
+            ) : (
+              nameEl
+            )}
             {edit ? (
               // Always editable on the canvas — add/edit/remove skills inline,
               // regardless of the template's display style.
@@ -580,6 +630,7 @@ function Skills({ doc, config, edit, opts }: { doc: ResumeDocument; config: Temp
             ) : hasKeywords ? (
               <span className="rm-skill-inline">{s.name ? ': ' : ''}{s.keywords!.join(' · ')}</span>
             ) : null}
+            <ItemDelete edit={edit} sectionKey="skills" id={s.id} label={ADD_LABEL.skills} />
           </div>
         )
       })}
@@ -595,13 +646,13 @@ function Languages({ doc, edit, opts }: { doc: ResumeDocument; config: TemplateC
       {doc.content.languages.map((l, i) => {
         if (!edit && !anyText(l.language)) return null
         return (
-        <div className="rm-mini" key={l.id}>
+        <div className="rm-mini" key={l.id} data-item-id={l.id}>
           {meter && typeof l.rating === 'number' ? (
             <div className="rm-level">
               {edit ? (
                 <Ed edit={edit} value={l.language} apply={(c, v) => { c.languages[i].language = v }} className="rm-mini-title" placeholder="Language" />
               ) : (
-                <span className="rm-mini-title" style={{ minWidth: '45%' }}>{l.language}</span>
+                <span className="rm-mini-title">{l.language}</span>
               )}
               <Proficiency rating={l.rating} style={prof} />
             </div>
@@ -611,6 +662,7 @@ function Languages({ doc, edit, opts }: { doc: ResumeDocument; config: TemplateC
               {prof !== 'none' && (edit || l.fluency) ? <Ed edit={edit} value={l.fluency} apply={(c, v) => { c.languages[i].fluency = v }} className="rm-mini-sub" placeholder="Fluency" /> : null}
             </div>
           )}
+          <ItemDelete edit={edit} sectionKey="languages" id={l.id} label={ADD_LABEL.languages} />
         </div>
         )
       })}
@@ -624,12 +676,13 @@ function Certificates({ doc, edit }: { doc: ResumeDocument; edit?: EditFn }) {
       {doc.content.certificates.map((cert, i) => {
         if (!edit && !anyText(cert.name, cert.issuer)) return null
         return (
-        <div className="rm-mini" key={cert.id}>
+        <div className="rm-mini" key={cert.id} data-item-id={cert.id}>
           <div className="rm-item-head">
             <span className="rm-mini-title">{edit ? <Ed edit={edit} value={cert.name} apply={(c, v) => { c.certificates[i].name = v }} placeholder="Certificate" /> : safeHref(cert.url) ? <a href={safeHref(cert.url)}>{cert.name}</a> : cert.name}</span>
             {edit || cert.date ? <span className="rm-item-date">{singleDate(edit, true, cert.date, (c, v) => { c.certificates[i].date = v })}</span> : null}
           </div>
           {edit || cert.issuer ? <Ed edit={edit} value={cert.issuer} apply={(c, v) => { c.certificates[i].issuer = v }} className="rm-mini-sub" placeholder="Issuer" /> : null}
+          <ItemDelete edit={edit} sectionKey="certificates" id={cert.id} label={ADD_LABEL.certificates} />
         </div>
         )
       })}
@@ -643,13 +696,14 @@ function Awards({ doc, edit }: { doc: ResumeDocument; edit?: EditFn }) {
       {doc.content.awards.map((a, i) => {
         if (!edit && !anyText(a.title, a.awarder, a.summary)) return null
         return (
-        <div className="rm-mini" key={a.id}>
+        <div className="rm-mini" key={a.id} data-item-id={a.id}>
           <div className="rm-item-head">
             <Ed edit={edit} value={a.title} apply={(c, v) => { c.awards[i].title = v }} className="rm-mini-title" placeholder="Award" />
             {edit || a.date ? <span className="rm-item-date">{singleDate(edit, true, a.date, (c, v) => { c.awards[i].date = v })}</span> : null}
           </div>
           {edit || a.awarder ? <Ed edit={edit} value={a.awarder} apply={(c, v) => { c.awards[i].awarder = v }} className="rm-mini-sub" placeholder="Awarder" /> : null}
           {has(a.summary) ? <RichText html={a.summary} /> : null}
+          <ItemDelete edit={edit} sectionKey="awards" id={a.id} label={ADD_LABEL.awards} />
         </div>
         )
       })}
@@ -663,13 +717,14 @@ function Publications({ doc, edit }: { doc: ResumeDocument; edit?: EditFn }) {
       {doc.content.publications.map((p, i) => {
         if (!edit && !anyText(p.name, p.publisher, p.summary)) return null
         return (
-        <div className="rm-mini" key={p.id}>
+        <div className="rm-mini" key={p.id} data-item-id={p.id}>
           <div className="rm-item-head">
             <span className="rm-mini-title">{edit ? <Ed edit={edit} value={p.name} apply={(c, v) => { c.publications[i].name = v }} placeholder="Title" /> : safeHref(p.url) ? <a href={safeHref(p.url)}>{p.name}</a> : p.name}</span>
             {edit || p.releaseDate ? <span className="rm-item-date">{singleDate(edit, true, p.releaseDate, (c, v) => { c.publications[i].releaseDate = v })}</span> : null}
           </div>
           {edit || p.publisher ? <Ed edit={edit} value={p.publisher} apply={(c, v) => { c.publications[i].publisher = v }} className="rm-mini-sub" placeholder="Publisher" /> : null}
           {has(p.summary) ? <RichText html={p.summary} /> : null}
+          <ItemDelete edit={edit} sectionKey="publications" id={p.id} label={ADD_LABEL.publications} />
         </div>
         )
       })}
@@ -683,9 +738,9 @@ function Volunteer({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
       {doc.content.volunteer.map((v, i) => {
         if (!edit && !anyText(v.position, v.organization, v.summary, v.highlights)) return null
         return (
-        <article className={`rm-item rm-keep${markClass(v.logo, opts?.showBadges ? badgeLetter(v.organization || v.position) : undefined)}`} key={v.id}>
+        <article className={`rm-item rm-keep${markClass(v.logo, entryBadgeOn(v, opts) ? badgeLetter(v.organization || v.position) : undefined)}`} key={v.id} data-item-id={v.id}>
           <ItemHead
-            badge={opts?.showBadges ? badgeLetter(v.organization || v.position) : undefined}
+            badge={entryBadgeOn(v, opts) ? badgeLetter(v.organization || v.position) : undefined}
             logo={v.logo}
             edit={edit}
             setLogo={(c, val) => { c.volunteer[i].logo = val }}
@@ -709,6 +764,7 @@ function Volunteer({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
               onPruneEmpty={edit ? () => edit((c) => { c.volunteer[i].highlights = c.volunteer[i].highlights.filter((h) => htmlToText(h).trim().length > 0) }) : undefined}
             />
           ) : null}
+          <ItemDelete edit={edit} sectionKey="volunteer" id={v.id} label={ADD_LABEL.volunteer} />
         </article>
         )
       })}
@@ -722,7 +778,7 @@ function Interests({ doc, edit }: { doc: ResumeDocument; edit?: EditFn }) {
       {doc.content.interests.map((it, i) => {
         if (!edit && !anyText(it.name, it.keywords)) return null
         return (
-        <div className="rm-mini" key={it.id}>
+        <div className="rm-mini" key={it.id} data-item-id={it.id}>
           <Ed edit={edit} value={it.name} apply={(c, v) => { c.interests[i].name = v }} className="rm-mini-title" placeholder="Interest" />
           {edit ? (
             <EditableChips
@@ -736,6 +792,7 @@ function Interests({ doc, edit }: { doc: ResumeDocument; edit?: EditFn }) {
               placeholder="Keyword"
             />
           ) : it.keywords?.length ? <span className="rm-skill-inline"> — {it.keywords.join(', ')}</span> : null}
+          <ItemDelete edit={edit} sectionKey="interests" id={it.id} label={ADD_LABEL.interests} />
         </div>
         )
       })}
@@ -749,9 +806,10 @@ function References({ doc, edit }: { doc: ResumeDocument; edit?: EditFn }) {
       {doc.content.references.map((r, i) => {
         if (!edit && !anyText(r.name, r.reference)) return null // blank rows never print
         return (
-          <div className="rm-mini" key={r.id}>
+          <div className="rm-mini" key={r.id} data-item-id={r.id}>
             <Ed edit={edit} as="div" value={r.name} apply={(c, v) => { c.references[i].name = v }} className="rm-mini-title" placeholder="Name" />
             {edit || r.reference ? <Ed edit={edit} as="div" value={r.reference} apply={(c, v) => { c.references[i].reference = v }} className="rm-mini-sub" placeholder="“Available on request”" /> : null}
+            <ItemDelete edit={edit} sectionKey="references" id={r.id} label={ADD_LABEL.references} />
           </div>
         )
       })}
@@ -769,7 +827,7 @@ function Custom({ doc, sectionKey, edit, opts }: { doc: ResumeDocument; sectionK
       {sec.items.map((it, i) => {
         if (!edit && !anyText(it.name, it.subtitle, it.summary, it.highlights)) return null
         return (
-        <article className="rm-item rm-keep" key={it.id}>
+        <article className="rm-item rm-keep" key={it.id} data-item-id={it.id}>
           <ItemHead
             badge={opts?.showBadges ? badgeLetter(it.name || it.subtitle) : undefined}
             title={<Ed edit={edit} value={it.name} apply={(c, v) => { c.custom[secIndex].items[i].name = v }} placeholder="Title" />}
@@ -795,6 +853,7 @@ function Custom({ doc, sectionKey, edit, opts }: { doc: ResumeDocument; sectionK
               onPruneEmpty={edit ? () => edit((c) => { const a = c.custom[secIndex].items[i].highlights; if (a) c.custom[secIndex].items[i].highlights = a.filter((h) => htmlToText(h).trim().length > 0) }) : undefined}
             />
           ) : null}
+          <ItemDelete edit={edit} sectionKey={sectionKey} id={it.id} label={ADD_LABEL[sectionKey] ?? 'entry'} />
         </article>
         )
       })}
@@ -818,6 +877,18 @@ function AddEntry({ sectionKey, edit }: { sectionKey: string; edit: EditFn }) {
         + Add {label}
       </button>
     </div>
+  )
+}
+
+/** Discoverability hint under a section that hasn't got real content yet — the
+ *  ghost placeholder text (Title, Publisher, …) looks like a normal entry, so
+ *  this makes clear it's not what will show up in the exported PDF. Canvas-only,
+ *  one muted line, never affects layout in print/thumbnail (no `edit` there). */
+function EmptyHint() {
+  return (
+    <p className="rm-empty-hint no-print" contentEditable={false}>
+      Empty sections are not exported
+    </p>
   )
 }
 
@@ -864,6 +935,7 @@ export function SectionBody({ sectionKey, doc, config, edit }: { sectionKey: str
   return (
     <>
       {body}
+      {!sectionHasContent(sectionKey, doc.content) ? <EmptyHint /> : null}
       <AddEntry sectionKey={sectionKey} edit={edit} />
     </>
   )

@@ -33,13 +33,18 @@ export default defineConfig({
       workbox: {
         // Fonts are self-hosted, so they precache via the woff2 glob below — no
         // third-party runtime caching is needed. The app contacts no external host.
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,woff,woff2}'],
+        // .icc: the 3KB sRGB profile embedded as every export's PDF/A
+        // OutputIntent — precached so an OFFLINE export is still PDF/A
+        // (without it the fetch fails and conformance silently drops).
+        globPatterns: ['**/*.{js,css,html,svg,png,ico,woff,woff2,icc}'],
         // OCR engine assets (tesseract worker/core/traineddata, ~10MB) are only
         // needed when a user imports a scanned PDF — keep them OUT of the precache
         // so first load stays lean; they fetch on demand, same-origin, from /ocr/.
         // Same for the opt-in semantic-match engine (~34MB) under /semantic/,
         // and its worker chunk — it must download only after the user opts in.
-        globIgnores: ['**/ocr/**', '**/semantic/**', '**/semantic.worker-*.js'],
+        // /fonts-pdf/ holds static font instances used ONLY when exporting a
+        // PDF; they are fetched on demand (1–3 families per résumé).
+        globIgnores: ['**/ocr/**', '**/semantic/**', '**/semantic.worker-*.js', '**/fonts-pdf/**'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         navigateFallback: '/index.html',
         // The print route renders client-side; never serve the SPA shell for it from cache wrongly.

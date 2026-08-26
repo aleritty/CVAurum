@@ -18,9 +18,15 @@ import type { Line, LayoutGraph } from './layoutGraph'
 // words on extraction ("WORK EXPERIENCE" → "WORKEXPERIENCE", "TECHNICAL SKILLS"
 // → "TECHNICALSKILLS"); headings must still be recognised.
 const HEAD_PHRASES: { key: string; re: RegExp }[] = [
-  { key: 'work', re: /^(work\s*experience|professional\s*experience|employment(\s*history)?|work\s*history|experience|career(\s*history)?)\b/i },
+  {
+    key: 'work',
+    re: /^(work\s*experience|professional\s*experience|employment(\s*history)?|work\s*history|experience|career(\s*history)?)\b/i,
+  },
   { key: 'education', re: /^(education|academic\b.*|qualifications?)\b/i },
-  { key: 'skills', re: /^(technical\s*skills|core\s*(skills|competenc\w*)|key\s*skills|skills(\s*[,&].*)?|technolog\w*|tech(nical)?\s*stack|expertise|areas\s*of\s*expertise|competenc\w*|proficienc\w*)\b/i },
+  {
+    key: 'skills',
+    re: /^(technical\s*skills|core\s*(skills|competenc\w*)|key\s*skills|skills(\s*[,&].*)?|technolog\w*|tech(nical)?\s*stack|expertise|areas\s*of\s*expertise|competenc\w*|proficienc\w*)\b/i,
+  },
   { key: 'projects', re: /^(projects?|personal\s*projects|key\s*projects|selected\s*projects)\b/i },
   { key: 'certificates', re: /^(certifications?(\s*[,&].*)?|licen[sc]es?|certificates?)\b/i },
   { key: 'awards', re: /^(awards?(\s*[,&].*)?|honou?rs|achievements|accomplishments)\b/i },
@@ -64,18 +70,29 @@ const startsAllCaps = (t: string): boolean => /^[A-Z][A-Z][A-Z &/,'’-]+/.test(
  * trailing text and headings on PDFs where pdf.js loses the bold flag).
  * Names, job titles and company names (no leading keyword) stay as content.
  */
-function headingKey(line: Line, g: LayoutGraph): string | null {
+function headingKey(line: Line, g: LayoutGraph, styledHeadingSeen = false, plainHeadingHeight = 0): string | null {
   const t = line.text.replace(/[:•·]\s*$/, '').trim()
   if (/@|https?:|\.com\b/.test(t)) return null // contact lines aren't headings
   const words = t.split(/\s+/)
+  const styled = line.upper || line.bold || line.height >= g.bodySize * 1.14
   // Tier 0 — the line is essentially JUST a section name (a plain heading), so
-  // accept it even when pdf.js gives no bold flag and it isn't all-caps.
-  if (words.length <= 3 && !/\d/.test(t)) {
+  // accept it even when pdf.js gives no bold flag and it isn't all-caps —
+  // UNLESS this document has already established its heading style
+  // (2026-08-16): with STYLED headings seen, a plain-case phrase line is
+  // body content (aurum's plain "Languages" skill-GROUP label split the
+  // skills section); with only PLAIN headings seen, the candidate must at
+  // least match their height (technical's headings are lowercase and just
+  // 0.6px taller than body — its 9.3px group label must not outrank its
+  // 9.9px headings).
+  const tier0Allowed =
+    styled || (!styledHeadingSeen && (plainHeadingHeight === 0 || line.height >= plainHeadingHeight - 0.35))
+  if (words.length <= 3 && !/\d/.test(t) && tier0Allowed) {
     for (const { key, re } of HEAD_PHRASES) {
       if (re.test(t) && t.replace(re, '').replace(/[^a-z]/gi, '').length <= 6) return key
     }
   }
-  const shortStyled = words.length <= 5 && t.length <= 46 && (line.upper || line.bold || line.height >= g.bodySize * 1.14)
+  const shortStyled =
+    words.length <= 5 && t.length <= 46 && (line.upper || line.bold || line.height >= g.bodySize * 1.14)
   const caps = startsAllCaps(t)
   if (!shortStyled && !caps) return null
   // 1) keyword at the start (handles trailing text + all-caps headings)
@@ -87,12 +104,47 @@ function headingKey(line: Line, g: LayoutGraph): string | null {
   return null
 }
 
-function splitSections(g: LayoutGraph): Section[] {
+export function splitSections(g: LayoutGraph): Section[] {
   const sections: Section[] = [{ key: 'header', title: '', lines: [] }]
+  let styledHeadingSeen = false
+  let plainHeadingHeight = 0
   for (const line of g.lines) {
-    const key = headingKey(line, g)
-    if (key) sections.push({ key, title: line.text.replace(/[:\s]+$/, ''), lines: [] })
-    else sections[sections.length - 1].lines.push(line)
+    const key = headingKey(line, g, styledHeadingSeen, plainHeadingHeight)
+    if (key) {
+      // Side-label layouts (atelier) render the section label LEFT of the
+      // body on the SAME baseline, so extraction merges them into one line
+      // and the heading used to swallow the section's first content line
+      // (2026-08-16: work lost its first entry, the cert name vanished).
+      // When the heading phrase is a PREFIX of a longer line whose
+      // remainder reads as content (has lowercase/digits — all-caps
+      // residue like "& EMPLOYMENT HISTORY" is part of the heading), the
+      // remainder re-enters the new section as its first line, items split
+      // at the phrase boundary so run-geometry consumers (chip rows) keep
+      // working.
+      let contentRest: Line | null = null
+      const t = line.text.trim()
+      const phrase = HEAD_PHRASES.find((p) => p.key === key)
+      const m = phrase ? phrase.re.exec(t) : null
+      if (m && m.index === 0 && m[0].length < t.length) {
+        const rest = t.slice(m[0].length).replace(/^[\s:•·—–-]+/, '')
+        if (rest.length > 3 && /[a-z0-9]/.test(rest)) {
+          let cum = 0
+          let idx = 0
+          for (; idx < line.items.length && cum < m[0].length; idx++) cum += line.items[idx].str.length + 1
+          const items = line.items.slice(idx)
+          contentRest = { ...line, text: rest, items, x: items[0]?.x ?? line.x }
+        }
+      }
+      sections.push({
+        key,
+        title: (contentRest && m ? m[0] : t).replace(/[:\s]+$/, ''),
+        lines: contentRest ? [contentRest] : [],
+      })
+      if (line.upper || line.bold || line.height >= g.bodySize * 1.14) styledHeadingSeen = true
+      else plainHeadingHeight = Math.max(plainHeadingHeight, line.height)
+    } else {
+      sections[sections.length - 1].lines.push(line)
+    }
   }
   return sections
 }
@@ -102,7 +154,8 @@ function splitSections(g: LayoutGraph): Section[] {
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/
 const LINKEDIN_RE = /(?:https?:\/\/)?(?:[a-z]{2,3}\.)?linkedin\.com\/(?:in|pub)\/[A-Za-z0-9_-]+\/?/i
 const GITHUB_RE = /(?:https?:\/\/)?(?:www\.)?github\.com\/[A-Za-z0-9_-]+\/?/i
-const URL_RE = /(?:https?:\/\/)?(?:www\.)?[A-Za-z0-9-]+\.(?:dev|io|com|net|org|me|co|ai|app|tech|in|uk|page|site|xyz)(?:\/[^\s|,]*)?/i
+const URL_RE =
+  /(?:https?:\/\/)?(?:www\.)?[A-Za-z0-9-]+\.(?:dev|io|com|net|org|me|co|ai|app|tech|in|uk|page|site|xyz)(?:\/[^\s|,]*)?/i
 const LOCATION_RE = /([A-Z][A-Za-z.'-]+(?:[ ][A-Z][A-Za-z.'-]+)*,\s*(?:[A-Z]{2}\b|[A-Z][A-Za-z]+))/
 const GPA_RE = /\b([0-4]\.\d{1,2})\s*(?:\/\s*(?:4|5|10)(?:\.0+)?)?\s*(?:GPA|CGPA)?\b/i
 
@@ -175,7 +228,8 @@ function pullLocation(text: string): { location: string; rest: string } {
 /* -------------------------------------------------------------- header fields */
 
 // Section labels and monograms masquerade as names in some templates' headers.
-const NOT_A_NAME = /^(contact(\s*(info|information|details))?|profile|summary|objective|about(\s*me)?|skills?|experience|education|resume|cv|curriculum\s*vitae|projects?|certifications?|references?)\.?$/i
+const NOT_A_NAME =
+  /^(contact(\s*(info|information|details))?|profile|summary|objective|about(\s*me)?|skills?|experience|education|resume|cv|curriculum\s*vitae|projects?|certifications?|references?)\.?$/i
 
 /**
  * Trim a name line that over-captured trailing non-name tokens (a website,
@@ -238,7 +292,11 @@ function parseHeader(header: Line[], content: ResumeContent) {
   const b = content.basics
   const blob = header.map((l) => l.text).join('  ·  ')
 
-  b.email = header.map((l) => l.text).join(' ').match(EMAIL_RE)?.[0] ?? ''
+  b.email =
+    header
+      .map((l) => l.text)
+      .join(' ')
+      .match(EMAIL_RE)?.[0] ?? ''
   // phone: international — longest digit-run (9–15 digits) that isn't a year/ZIP
   const phoneCands = (blob.match(/\+?\(?\d[\d().\-\s]{7,}\d/g) || [])
     .map((p) => p.trim())
@@ -257,7 +315,7 @@ function parseHeader(header: Line[], content: ResumeContent) {
   if (profiles.length) b.profiles = profiles
   // personal site = a URL that isn't an email/linkedin/github
   const urls = (blob.match(new RegExp(URL_RE, 'gi')) || []).filter(
-    (u) => !/linkedin|github/i.test(u) && !blob.includes('@' + u.replace(/^https?:\/\//, '')),
+    (u) => !/linkedin|github/i.test(u) && !blob.includes('@' + u.replace(/^https?:\/\//, ''))
   )
   if (urls[0]) b.url = httpify(urls[0])
 
@@ -277,7 +335,13 @@ function parseHeader(header: Line[], content: ResumeContent) {
     // headline = the nearest following non-contact, letter-ish header line
     const after = header.slice(named.i + 1).find((l) => {
       const t = l.text
-      return /[A-Za-z]/.test(t) && !EMAIL_RE.test(t) && !/\d{3}/.test(t) && !/https?:|\.com|,\s*[A-Z]{2}\b/.test(t) && t.length <= 60
+      return (
+        /[A-Za-z]/.test(t) &&
+        !EMAIL_RE.test(t) &&
+        !/\d{3}/.test(t) &&
+        !/https?:|\.com|,\s*[A-Z]{2}\b/.test(t) &&
+        t.length <= 60
+      )
     })
     if (after) b.label = cleanEdge(after.text)
   }
@@ -294,7 +358,13 @@ function parseHeader(header: Line[], content: ResumeContent) {
         const rest = cleanEdge(header[i].text.slice(ln.length))
         const next = header[i + 1]
         if (rest && rest.length <= 50) b.label = rest
-        else if (next && /[A-Za-z]/.test(next.text) && !EMAIL_RE.test(next.text) && !/\d{3}/.test(next.text) && next.text.length <= 80)
+        else if (
+          next &&
+          /[A-Za-z]/.test(next.text) &&
+          !EMAIL_RE.test(next.text) &&
+          !/\d{3}/.test(next.text) &&
+          next.text.length <= 80
+        )
           b.label = cleanEdge(next.text)
       }
       break
@@ -315,7 +385,10 @@ function recoverMissingBasics(content: ResumeContent, allLines: Line[], g: Layou
   if (!b.phone) {
     const cands = (blob.match(/\+?\(?\d[\d().\-\s]{7,}\d/g) || [])
       .map((x) => x.trim())
-      .filter((x) => { const d = x.replace(/\D/g, ''); return d.length >= 9 && d.length <= 15 })
+      .filter((x) => {
+        const d = x.replace(/\D/g, '')
+        return d.length >= 9 && d.length <= 15
+      })
     b.phone = cands.sort((a, c) => c.replace(/\D/g, '').length - a.replace(/\D/g, '').length)[0] ?? ''
   }
   const httpify = (u: string) => (/^https?:\/\//.test(u) ? u : 'https://' + u.replace(/^\/+/, ''))
@@ -329,7 +402,10 @@ function recoverMissingBasics(content: ResumeContent, allLines: Line[], g: Layou
   }
   if (!b.location || (!b.location.city && !b.location.region)) {
     const locM = blob.match(LOCATION_RE)
-    if (locM) { const [city, region] = locM[1].split(',').map((x) => x.trim()); b.location = { city, region } }
+    if (locM) {
+      const [city, region] = locM[1].split(',').map((x) => x.trim())
+      b.location = { city, region }
+    }
   }
   if (!b.name) {
     // The name is almost always the LARGEST text near the top. Require a clean
@@ -340,7 +416,7 @@ function recoverMissingBasics(content: ResumeContent, allLines: Line[], g: Layou
     // two-column résumé the name sits in the main column, after the sidebar in
     // reading order, but it is the LARGEST text on the page. Pick biggest font,
     // tie-break topmost.
-    const firstPage = (allLines[0]?.page ?? 0)
+    const firstPage = allLines[0]?.page ?? 0
     const cands = allLines
       .filter((l) => (l.page ?? 0) === firstPage)
       .map((l) => ({ l, clean: cleanName(l.text) }))
@@ -415,7 +491,12 @@ function toEntries(lines: Line[], g: LayoutGraph): Line[][] {
         // Carry up to 2 trailing plain header lines (company/title above the date)
         // into the new entry instead of leaving them on the previous one.
         const carry: Line[] = []
-        while (cur.length && carry.length < 2 && !isHL(cur[cur.length - 1]) && !RANGE_RE.test(cur[cur.length - 1].text)) {
+        while (
+          cur.length &&
+          carry.length < 2 &&
+          !isHL(cur[cur.length - 1]) &&
+          !RANGE_RE.test(cur[cur.length - 1].text)
+        ) {
           carry.unshift(cur.pop()!)
         }
         entries.push(cur)
@@ -451,7 +532,8 @@ function toEntries(lines: Line[], g: LayoutGraph): Line[][] {
 const ROLE_LABEL = /^(role|title|designation|position|job\s*title)$/i
 const COMPANY_LABEL = /^(client|clients|company|employer|organi[sz]ation|firm|account)$/i
 // Strong signals that an unlabelled header line is the employer, not the job title.
-const COMPANY_HINT = /\b(inc|ltd|llc|llp|pvt|corp|gmbh|consultanc\w*|services|technolog\w*|solutions|systems|enterprises|university|college|institute|infotech)\b/i
+const COMPANY_HINT =
+  /\b(inc|ltd|llc|llp|pvt|corp|gmbh|consultanc\w*|services|technolog\w*|solutions|systems|enterprises|university|college|institute|infotech)\b/i
 const DATE_FRAGMENT = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s*\d{0,4}$/i
 
 /**
@@ -504,76 +586,105 @@ function assignRoleCompany(headerLines: string[]): { position: string; name: str
 
 function parseWork(lines: Line[], g: LayoutGraph): ResumeContent['work'] {
   const isHL = makeIsHighlight(lines, g)
-  return toEntries(lines, g).map((entry) => {
-    const hlLines: Line[] = []
-    const headerLines: string[] = []
-    let start = '',
-      end = '',
-      location = ''
-    for (const line of entry) {
-      if (isHL(line)) {
-        hlLines.push(line)
-        continue
+  return toEntries(lines, g)
+    .map((entry) => {
+      const hlLines: Line[] = []
+      const headerLines: string[] = []
+      let start = '',
+        end = '',
+        location = ''
+      for (const line of entry) {
+        if (isHL(line)) {
+          hlLines.push(line)
+          continue
+        }
+        const d = pullDates(line.text)
+        if (d.start && !start) {
+          start = d.start
+          end = d.end
+        }
+        let rest = d.rest
+        const pl = pullLocation(rest)
+        if (pl.location && !location) {
+          location = pl.location
+          rest = pl.rest
+        }
+        rest = cleanEdge(rest)
+        if (rest) headerLines.push(rest)
       }
-      const d = pullDates(line.text)
-      if (d.start && !start) {
-        start = d.start
-        end = d.end
+      const highlights = mergeHighlights(hlLines)
+      const { position, name, summary } = assignRoleCompany(headerLines)
+      return {
+        id: uid(),
+        name,
+        position,
+        location,
+        url: '',
+        startDate: start,
+        endDate: end,
+        summary: summary ? esc(summary) : '',
+        highlights,
       }
-      let rest = d.rest
-      const pl = pullLocation(rest)
-      if (pl.location && !location) {
-        location = pl.location
-        rest = pl.rest
-      }
-      rest = cleanEdge(rest)
-      if (rest) headerLines.push(rest)
-    }
-    const highlights = mergeHighlights(hlLines)
-    const { position, name, summary } = assignRoleCompany(headerLines)
-    return {
-      id: uid(),
-      name,
-      position,
-      location,
-      url: '',
-      startDate: start,
-      endDate: end,
-      summary: summary ? esc(summary) : '',
-      highlights,
-    }
-  }).filter((w) => w.position || w.name || w.highlights.length)
+    })
+    .filter((w) => w.position || w.name || w.highlights.length)
+}
+
+/** Volunteer entries share the work shape (org, role, dates, bullets) —
+ *  parse with the work machinery and remap fields (2026-08-16: the
+ *  volunteer section was detected by the splitter but had no parser case,
+ *  so the whole section silently vanished on import). */
+function parseVolunteer(lines: Line[], g: LayoutGraph): ResumeContent['volunteer'] {
+  return parseWork(lines, g).map((w) => ({
+    id: uid(),
+    organization: w.name,
+    position: w.position,
+    location: w.location,
+    url: '',
+    startDate: w.startDate,
+    endDate: w.endDate,
+    summary: w.summary,
+    highlights: w.highlights,
+  }))
 }
 
 function parseEducation(lines: Line[], g: LayoutGraph): ResumeContent['education'] {
-  return toEntries(lines, g).map((entry) => {
-    const text = entry.map((l) => l.text).join(' · ')
-    const d = pullDates(text)
-    const gpa = text.match(GPA_RE)?.[1] ?? ''
-    const headerLines = entry.filter((l) => !isBullet(l.text)).map((l) => cleanEdge(pullDates(l.text).rest)).filter(Boolean)
-    const degreeLine = headerLines.find((l) => /\b(b\.?s\.?|b\.?a\.?|m\.?s\.?|m\.?a\.?|ph\.?d|bachelor|master|associate|diploma|mba|b\.?tech|m\.?tech|b\.?e\.?\b)/i.test(l))
-    const instLine = headerLines.find((l) => l !== degreeLine) || headerLines[0] || ''
-    // Strip GPA, then peel the trailing "City, ST" so it doesn't pollute the name.
-    const instNoGpa = instLine.replace(GPA_RE, '').trim()
-    const plInst = pullLocation(instNoGpa)
-    const loc = plInst.location || text.match(LOCATION_RE)?.[1] || ''
-    return {
-      id: uid(),
-      institution: (plInst.location ? plInst.rest : instNoGpa).trim() || '',
-      area: degreeLine ? degreeLine.replace(GPA_RE, '').trim() : '',
-      studyType: '',
-      location: loc,
-      startDate: d.start,
-      endDate: d.end,
-      score: gpa ? `${gpa} GPA` : '',
-      url: '',
-      summary: '',
-      courses: [],
-    }
-  }).filter((e) => e.institution || e.area)
+  return toEntries(lines, g)
+    .map((entry) => {
+      const text = entry.map((l) => l.text).join(' · ')
+      const d = pullDates(text)
+      const gpa = text.match(GPA_RE)?.[1] ?? ''
+      const headerLines = entry
+        .filter((l) => !isBullet(l.text))
+        .map((l) => cleanEdge(pullDates(l.text).rest))
+        .filter(Boolean)
+      const degreeLine = headerLines.find((l) =>
+        /\b(b\.?s\.?|b\.?a\.?|m\.?s\.?|m\.?a\.?|ph\.?d|bachelor|master|associate|diploma|mba|b\.?tech|m\.?tech|b\.?e\.?\b)/i.test(
+          l
+        )
+      )
+      const instLine = headerLines.find((l) => l !== degreeLine) || headerLines[0] || ''
+      // Strip GPA, then peel the trailing "City, ST" so it doesn't pollute the name.
+      const instNoGpa = instLine.replace(GPA_RE, '').trim()
+      const plInst = pullLocation(instNoGpa)
+      const loc = plInst.location || text.match(LOCATION_RE)?.[1] || ''
+      return {
+        id: uid(),
+        institution: (plInst.location ? plInst.rest : instNoGpa).trim() || '',
+        area: degreeLine ? degreeLine.replace(GPA_RE, '').trim() : '',
+        studyType: '',
+        location: loc,
+        startDate: d.start,
+        endDate: d.end,
+        score: gpa ? `${gpa} GPA` : '',
+        url: '',
+        summary: '',
+        courses: [],
+      }
+    })
+    .filter((e) => e.institution || e.area)
 }
 
-function parseSkills(lines: Line[]): ResumeContent['skills'] {
+export function parseSkills(lines: Line[]): ResumeContent['skills'] {
   // Dedupe (case-insensitive), drop junk/sentence-length entries, and cap per
   // group — some ATS-stuffed résumés list hundreds of comma-separated keywords.
   const clean = (arr: string[]): string[] => {
@@ -594,7 +705,8 @@ function parseSkills(lines: Line[]): ResumeContent['skills'] {
   // prose. Trailing content that merged in from an unrecognised heading
   // (a declaration, "references available on request", personal details) must
   // NOT be shredded into random "skills".
-  const NONSKILL = /\b(available\s+(up)?on\s+request|references?|declaration|hereby|i\s+declare|date\s+of\s+birth|d\.?o\.?b\.?|marital|nationality|passport|gender|father'?s?\s+name|mother'?s?\s+name|permanent\s+address|current\s+address|languages?\s+known)\b/i
+  const NONSKILL =
+    /\b(available\s+(up)?on\s+request|references?|declaration|hereby|i\s+declare|date\s+of\s+birth|d\.?o\.?b\.?|marital|nationality|passport|gender|father'?s?\s+name|mother'?s?\s+name|permanent\s+address|current\s+address|languages?\s+known)\b/i
   const looksLikeSkillList = (t: string): boolean => {
     const s = t.trim()
     if (!s || NONSKILL.test(s)) return false
@@ -603,69 +715,359 @@ function parseSkills(lines: Line[]): ResumeContent['skills'] {
     if (/[,;|•·]/.test(s)) return true // a delimited keyword list (incl. stuffed)
     return words.length <= 4 // a lone short term is plausibly one skill
   }
+  // Chip rows (2026-08-16 — aurum/obsidian imported skills: [] while every
+  // chip sat intact in the layout graph): designed templates render a group
+  // name over a row of chips, which extracts as ONE space-separated line
+  // the keyword-list test above rightly rejects (no delimiters, >4 words).
+  // The chips are still recoverable EXACTLY, because each chip is its own
+  // text RUN: >=2 items with every inter-run gap >= 3pt (chip padding,
+  // measured ~13pt; style-split prose runs abut at ~0). Keywords come from
+  // the runs — multi-word chips survive whole. A 1-3-word plain line
+  // directly above a chip row is that group's NAME (held one line; if no
+  // chip row follows it falls through to the loose pile as before).
+  const isChipRow = (l: Line): boolean => {
+    if (!l.items || l.items.length < 2) return false
+    for (let i = 1; i < l.items.length; i++) {
+      const gapPt = l.items[i].x - (l.items[i - 1].x + l.items[i - 1].width)
+      if (gapPt < 3) return false
+    }
+    return true
+  }
+  const groupNameish = (t: string): boolean =>
+    !!t && t.length <= 30 && !/[,;|•·:]/.test(t) && !/[.!?]$/.test(t) && t.split(/\s+/).length <= 3
   const groups: ResumeContent['skills'] = []
   const loose: string[] = []
+  let pendingName: string | null = null
   for (const line of lines) {
     const t = stripBullet(line.text)
     const m = t.match(/^([A-Za-z][A-Za-z /&+#.-]{1,28}):\s*(.+)$/)
     if (m) {
+      if (pendingName) loose.push(pendingName)
+      pendingName = null
       const keywords = clean(m[2].split(/[,;|•·]/))
       if (keywords.length) groups.push({ id: uid(), name: m[1].trim(), level: '', keywords })
-    } else if (looksLikeSkillList(t)) {
-      loose.push(...t.split(/[,;|•·]/))
+    } else if (isChipRow(line)) {
+      const keywords = clean(line.items.map((it) => it.str))
+      if (keywords.length) groups.push({ id: uid(), name: pendingName ?? '', level: '', keywords })
+      pendingName = null
+    } else if (groupNameish(t)) {
+      if (pendingName) loose.push(pendingName)
+      pendingName = t
+    } else {
+      if (pendingName) loose.push(pendingName)
+      pendingName = null
+      if (looksLikeSkillList(t)) loose.push(...t.split(/[,;|•·]/))
     }
   }
+  if (pendingName) loose.push(pendingName)
   const looseClean = clean(loose)
-  if (looseClean.length) groups.push({ id: uid(), name: groups.length ? 'Additional' : 'Skills', level: '', keywords: looseClean })
+  if (looseClean.length)
+    groups.push({ id: uid(), name: groups.length ? 'Additional' : 'Skills', level: '', keywords: looseClean })
   return groups.slice(0, 12)
 }
 
 function parseProjects(lines: Line[], g: LayoutGraph): ResumeContent['projects'] {
   const isHL = makeIsHighlight(lines, g)
-  return toEntries(lines, g).map((entry) => {
-    const hlLines: Line[] = []
-    const headerLines: string[] = []
-    let start = '', end = '', url = ''
-    for (const line of entry) {
-      if (isHL(line)) { hlLines.push(line); continue }
-      const d = pullDates(line.text)
-      if (d.start && !start) { start = d.start; end = d.end }
-      let rest = d.rest
-      const u = rest.match(URL_RE)
-      if (u && !url) { url = u[0]; rest = rest.replace(u[0], '') }
-      rest = cleanEdge(rest)
-      if (rest) headerLines.push(rest)
-    }
-    const highlights = mergeHighlights(hlLines)
-    const [name = '', description = ''] = headerLines
-    return { id: uid(), name, description: description ? esc(description) : '', url: url ? (/^https?:/.test(url) ? url : 'https://' + url) : '', startDate: start, endDate: end, highlights, keywords: [] }
-  }).filter((p) => p.name)
+  return toEntries(lines, g)
+    .map((entry) => {
+      const hlLines: Line[] = []
+      const headerLines: string[] = []
+      let start = '',
+        end = '',
+        url = ''
+      for (const line of entry) {
+        if (isHL(line)) {
+          hlLines.push(line)
+          continue
+        }
+        const d = pullDates(line.text)
+        if (d.start && !start) {
+          start = d.start
+          end = d.end
+        }
+        let rest = d.rest
+        const u = rest.match(URL_RE)
+        if (u && !url) {
+          url = u[0]
+          rest = rest.replace(u[0], '')
+        }
+        rest = cleanEdge(rest)
+        if (rest) headerLines.push(rest)
+      }
+      const highlights = mergeHighlights(hlLines)
+      const [name = '', description = ''] = headerLines
+      return {
+        id: uid(),
+        name,
+        description: description ? esc(description) : '',
+        url: url ? (/^https?:/.test(url) ? url : 'https://' + url) : '',
+        startDate: start,
+        endDate: end,
+        highlights,
+        keywords: [],
+      }
+    })
+    .filter((p) => p.name)
 }
 
-function parseSimpleList(lines: Line[], key: 'languages' | 'certificates' | 'awards' | 'interests') {
+/** A line reads as visibly LESS prominent than the line that started its
+ *  entry when it lost the bold or lost >0.5px of height — dual signal
+ *  because print/real PDFs bake weight into embedded font names (bold flag
+ *  works) while native exports normalize names (bold flag is blind) but
+ *  render secondary lines smaller. */
+const lessProminentThan = (l: Line, start: Line) => !l.bold && (start.bold || l.height < start.height - 0.5)
+
+/** Pulls a trailing bare year ("Engineering Excellence Award 2023") off an
+ *  entry title — designed layouts right-align the date, which extraction
+ *  merges into the title line's text. */
+const pullTrailingYear = (t: string): { text: string; year: string } => {
+  const m = t.match(/^(.*?)\s+((?:19|20)\d{2})$/)
+  return m ? { text: m[1].trim(), year: m[2] } : { text: t, year: '' }
+}
+
+/** Groups section lines into per-entry clusters by vertical gap: the
+ *  itemGap between entries is far larger than the line spacing inside one
+ *  (same `lineGap * 1.8` rule the work parser's fallback trusts); a page or
+ *  column change starts a new cluster since the gap can't be measured
+ *  across. */
+function clusterByGap(src: Line[], lineGap: number): Line[][] {
+  const clusters: Line[][] = []
+  let cur: Line[] = []
+  for (let i = 0; i < src.length; i++) {
+    const l = src[i]
+    const prev = src[i - 1]
+    const sameStream = prev && l.page === prev.page && l.col === prev.col
+    const bigGap = sameStream && l.top - prev.top > lineGap * 1.8
+    if (cur.length && (bigGap || !sameStream)) {
+      clusters.push(cur)
+      cur = []
+    }
+    cur.push(l)
+  }
+  if (cur.length) clusters.push(cur)
+  return clusters
+}
+
+export function parseSimpleList(
+  lines: Line[],
+  key: 'languages' | 'certificates' | 'awards' | 'interests' | 'publications',
+  lineGap = 12
+) {
   const text = lines.map((l) => stripBullet(l.text)).filter(Boolean)
   if (key === 'languages') {
-    return text.flatMap((t) => t.split(/[,;|]/)).map((s) => s.trim()).filter(Boolean).map((language) => ({ id: uid(), language: language.replace(/\s*\(.*\)$/, '').trim(), fluency: (language.match(/\(([^)]+)\)/)?.[1] || '').trim() }))
+    // Right-aligned fluency (2026-08-16): our templates render the language
+    // left and fluency right — ONE extracted line, TWO text runs with a
+    // huge gap. "English Native" used to import with empty fluency.
+    const out: { id: string; language: string; fluency: string }[] = []
+    const rest: string[] = []
+    for (const l of lines) {
+      const t = stripBullet(l.text)
+      if (!t) continue
+      if (l.items && l.items.length === 2 && l.items[1].x - (l.items[0].x + l.items[0].width) >= 24) {
+        out.push({ id: uid(), language: l.items[0].str.trim(), fluency: l.items[1].str.trim() })
+      } else {
+        rest.push(t)
+      }
+    }
+    out.push(
+      ...rest
+        .flatMap((t) => t.split(/[,;|]/))
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((language) => ({
+          id: uid(),
+          language: language.replace(/\s*\(.*\)$/, '').trim(),
+          fluency: (language.match(/\(([^)]+)\)/)?.[1] || '').trim(),
+        }))
+    )
+    return out
   }
   if (key === 'interests') {
-    const kws = text.flatMap((t) => t.split(/[,;|•·]/)).map((s) => s.trim()).filter(Boolean)
+    const kws = text
+      .flatMap((t) => t.split(/[,;|•·]/))
+      .map((s) => s.trim())
+      .filter(Boolean)
     return kws.length ? [{ id: uid(), name: 'Interests', keywords: kws }] : []
   }
-  if (key === 'certificates') return text.map((name) => ({ id: uid(), name, issuer: '', date: '', url: '' }))
-  return text.map((title) => ({ id: uid(), title, awarder: '', date: '', summary: '' })) // awards
+  if (key === 'certificates') {
+    // Name/issuer pairing (2026-08-16, found by the multi-page round-trip
+    // probe): designed resumes — ours included — render a cert as a
+    // prominent name line followed by a muted issuer line, which used to
+    // import as TWO certificates. A line is PRIMARY (starts a cert) when
+    // it is bold or within half a px of the section's tallest line; a
+    // secondary line attaches as issuer to a cert that has none yet. Two
+    // signals on purpose: print/real PDFs bake weight into font names
+    // (bold flag works), while native exports normalize font names (bold
+    // flag is blind) but render the issuer visibly smaller — measured
+    // 9.6 vs 8.8 on classic. A flat unstyled list (all same height, no
+    // bold) stays one cert per line, jitter under 0.5px ignored.
+    const src = lines.filter((l) => stripBullet(l.text))
+    // Cluster by vertical gap first (2026-08-16, import gate): narrow aside
+    // columns WRAP a cert's name across lines, which used to import one
+    // cert as two or three on double/portrait/deedy. Within a structured
+    // cluster, leading same-prominence lines JOIN into the name, the first
+    // less prominent line (lessProminentThan vs the cluster's first line)
+    // becomes the issuer, and any further line starts a new cert. A cluster
+    // with no prominence structure (flat unstyled list) stays one cert per
+    // line, so gap-separated plain lists never merge.
+    const out: { id: string; name: string; issuer: string; date: string; url: string }[] = []
+    // Year pull happens per FRAGMENT before joining: a right-aligned date
+    // merges into the END of whichever wrapped line it sits beside, so the
+    // joined name would otherwise carry the year mid-string.
+    const pushCert = (parts: string[]) => {
+      let date = ''
+      const nameParts = parts.map((p) => {
+        const { text, year } = pullTrailingYear(p)
+        if (year && !date) date = year
+        return text
+      })
+      out.push({ id: uid(), name: nameParts.join(' ').trim(), issuer: '', date, url: '' })
+    }
+    for (const cl of clusterByGap(src, lineGap)) {
+      const first = cl[0]
+      const structured = cl.some((l) => lessProminentThan(l, first))
+      if (!structured) {
+        // Equal-prominence cluster (atelier styles name and issuer
+        // identically): the YEAR anchors the entry — but only in the
+        // unambiguous shape where the FIRST line is dated and every
+        // follower is yearless. Any other mix (all dated, middle dated,
+        // none dated) is read as a flat list, one cert per line.
+        const dated = cl.map((l) => pullTrailingYear(stripBullet(l.text)))
+        if (cl.length > 1 && dated[0].year && dated.slice(1).every((d) => !d.year)) {
+          pushCert([stripBullet(first.text)])
+          for (let i = 1; i < cl.length; i++) {
+            const cur = out[out.length - 1]
+            if (cur && !cur.issuer) cur.issuer = dated[i].text
+            else pushCert([dated[i].text])
+          }
+          continue
+        }
+        for (const l of cl) pushCert([stripBullet(l.text)])
+        continue
+      }
+      let nameParts: string[] = []
+      for (const l of cl) {
+        const t = stripBullet(l.text)
+        if (!lessProminentThan(l, first)) {
+          nameParts.push(t)
+        } else if (nameParts.length) {
+          pushCert(nameParts)
+          nameParts = []
+          out[out.length - 1].issuer = t
+        } else if (out.length && !out[out.length - 1].issuer) {
+          out[out.length - 1].issuer = t
+        } else {
+          // a second secondary line with the issuer already taken — keep
+          // the pre-cluster behavior: it becomes its own cert
+          pushCert([t])
+        }
+      }
+      if (nameParts.length) pushCert(nameParts)
+    }
+    return out
+  }
+  // awards + publications (2026-08-16): one award used to import as THREE —
+  // its title, awarder, and summary lines each became an award (and
+  // publications had NO parser case at all — the detected section silently
+  // vanished). Prominence alone cannot fix it (live-measured on classic:
+  // title h9.6, awarder h8.83, summary h9.6 — summary matches the title),
+  // so both group by VERTICAL GAP first (the itemGap between entries is far
+  // larger than the line spacing inside one; same `lineGap * 1.8` rule the
+  // work parser's fallback uses, new cluster on page/column change since
+  // gap can't be measured across), then assign roles inside each cluster:
+  // first line = title (trailing year -> date), a less prominent line of
+  // issuer-ish length = awarder/publisher, everything else joins the
+  // summary. A cluster with NO prominence structure (flat unstyled list)
+  // stays one entry per line.
+  const src = lines.filter((l) => stripBullet(l.text))
+  const clusters = clusterByGap(src, lineGap)
+  const entries: { title: string; sub: string; date: string; summary: string }[] = []
+  for (const cl of clusters) {
+    const [first, ...rest] = cl
+    const structured = rest.some((l) => lessProminentThan(l, first))
+    if (!structured && rest.length) {
+      // Same year-anchor rule as certificates (atelier's award summary is
+      // even LARGER than its title, so prominence is useless there): first
+      // line dated + all followers yearless = ONE entry; short plain
+      // follower = awarder/publisher, sentence-like followers join the
+      // summary. Any other dating mix stays one entry per line.
+      const dated = cl.map((l) => pullTrailingYear(stripBullet(l.text)))
+      if (dated[0].year && dated.slice(1).every((d) => !d.year)) {
+        const entry = { title: dated[0].text, sub: '', date: dated[0].year, summary: '' }
+        for (let i = 1; i < cl.length; i++) {
+          const t = dated[i].text
+          if (!entry.sub && t.length <= 60 && !/[.!?]$/.test(t)) entry.sub = t
+          else entry.summary = entry.summary ? `${entry.summary} ${t}` : t
+        }
+        entries.push(entry)
+        continue
+      }
+      for (const l of cl) {
+        const { text: title, year } = pullTrailingYear(stripBullet(l.text))
+        entries.push({ title, sub: '', date: year, summary: '' })
+      }
+      continue
+    }
+    // Title = the LEADING run of same-prominence lines (narrow columns wrap
+    // titles), year pulled per fragment (a right-aligned date merges into
+    // the end of whichever wrapped line it sits beside).
+    let date = ''
+    const titleParts: string[] = []
+    let i = 0
+    for (; i < cl.length && !lessProminentThan(cl[i], first); i++) {
+      const { text, year } = pullTrailingYear(stripBullet(cl[i].text))
+      titleParts.push(text)
+      if (year && !date) date = year
+    }
+    const entry = { title: titleParts.join(' ').trim(), sub: '', date, summary: '' }
+    for (; i < cl.length; i++) {
+      const t = stripBullet(cl[i].text)
+      if (!entry.sub && lessProminentThan(cl[i], first) && t.length <= 60) entry.sub = t
+      else entry.summary = entry.summary ? `${entry.summary} ${t}` : t
+    }
+    entries.push(entry)
+  }
+  if (key === 'publications') {
+    return entries.map((e) => ({
+      id: uid(),
+      name: e.title,
+      publisher: e.sub,
+      releaseDate: e.date,
+      url: '',
+      summary: e.summary,
+    }))
+  }
+  return entries.map((e) => ({ id: uid(), title: e.title, awarder: e.sub, date: e.date, summary: e.summary }))
 }
 
 /* ------------------------------------------------------------------ assemble */
 
 export interface ImportResult {
   content: ResumeContent
-  meta: { pages: number; chars: number; sections: string[]; lowText: boolean; ocrPages: number[]; ocrEngineFailed: boolean }
+  meta: {
+    pages: number
+    chars: number
+    sections: string[]
+    lowText: boolean
+    ocrPages: number[]
+    ocrEngineFailed: boolean
+  }
 }
 
 const BLANK = (): ResumeContent => ({
   basics: { name: '', label: '', image: '', email: '', phone: '', url: '', summary: '', location: {}, profiles: [] },
-  work: [], volunteer: [], education: [], awards: [], certificates: [], publications: [],
-  skills: [], languages: [], interests: [], references: [], projects: [], custom: [],
+  work: [],
+  volunteer: [],
+  education: [],
+  awards: [],
+  certificates: [],
+  publications: [],
+  skills: [],
+  languages: [],
+  interests: [],
+  references: [],
+  projects: [],
+  custom: [],
 })
 
 export function parseLayout(g: LayoutGraph): ImportResult {
@@ -675,8 +1077,18 @@ export function parseLayout(g: LayoutGraph): ImportResult {
   if (header) parseHeader(header.lines, content)
   recoverMissingBasics(content, g.lines, g)
 
+  // Monogram furniture (2026-08-16): initials/pinnacle-class templates
+  // repeat the person's INITIALS as real text at the top of continuation
+  // pages ("AM"), which landed inside whatever section straddled the page
+  // and imported as junk (volunteer position "AM"). A standalone line
+  // exactly equal to the detected name's initials is page furniture.
+  const initials = (content.basics.name || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w[0].toUpperCase())
+    .join('')
   for (const sec of sections) {
-    const lines = sec.lines.filter((l) => l.text.trim())
+    const lines = sec.lines.filter((l) => l.text.trim() && !(initials.length >= 2 && l.text.trim() === initials))
     if (!lines.length) continue
     switch (sec.key) {
       case 'summary':
@@ -701,7 +1113,15 @@ export function parseLayout(g: LayoutGraph): ImportResult {
         content.certificates.push(...(parseSimpleList(lines, 'certificates') as ResumeContent['certificates']))
         break
       case 'awards':
-        content.awards.push(...(parseSimpleList(lines, 'awards') as ResumeContent['awards']))
+        content.awards.push(...(parseSimpleList(lines, 'awards', g.lineGap) as ResumeContent['awards']))
+        break
+      case 'publications':
+        content.publications.push(
+          ...(parseSimpleList(lines, 'publications', g.lineGap) as ResumeContent['publications'])
+        )
+        break
+      case 'volunteer':
+        content.volunteer.push(...parseVolunteer(lines, g))
         break
       case 'interests':
         content.interests.push(...(parseSimpleList(lines, 'interests') as ResumeContent['interests']))
@@ -720,7 +1140,18 @@ export function parseLayout(g: LayoutGraph): ImportResult {
           content.custom.push({
             id: uid(),
             name: sec.title || 'Section',
-            items: [{ id: uid(), name: '', subtitle: '', date: '', location: '', url: '', summary: bullets.length ? '' : esc(lines.map((l) => l.text).join(' ')), highlights: bullets }],
+            items: [
+              {
+                id: uid(),
+                name: '',
+                subtitle: '',
+                date: '',
+                location: '',
+                url: '',
+                summary: bullets.length ? '' : esc(lines.map((l) => l.text).join(' ')),
+                highlights: bullets,
+              },
+            ],
           })
         }
     }

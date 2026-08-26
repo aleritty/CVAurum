@@ -1,0 +1,69 @@
+/**
+ * The single entry point every "Download PDF" affordance (top bar menu,
+ * command palette) should call. Native, in-app rendering (render.tsx) is the
+ * default engine now that both verification gates are green across all
+ * templates x personas AND multi-page resumes render natively via smart
+ * band-slicing (native-multipage-pdf plan) — the browser's print dialog is
+ * kept as the automatic fallback for the two cases native genuinely can't
+ * handle (auto-fit ON still doesn't paginate, by design — spec section 3 —
+ * so an over-length doc with auto-fit on still overflows; and a doc with no
+ * legal page-break candidate anywhere, `PaginationImpossibleError`) and as a
+ * support/debug escape hatch.
+ */
+import { saveDoc } from '@/lib/storage'
+import { openPrintWindow, pdfBaseName } from '@/lib/pdf'
+import { downloadBlob } from '@/lib/utils'
+import type { ResumeDocument } from '@/types/document'
+import { renderResumePdf, PdfMultiPageUnsupportedError } from './render'
+
+export type PdfExportOutcome = 'native' | 'print-fallback'
+
+/** Support/debug lever only — flip via devtools console. With the native
+ *  engine now the default, this flag's ONLY job is to force the old print
+ *  path (e.g. to rule out a native-renderer bug while triaging a report). */
+const FORCE_PRINT_KEY = 'cvaurum:pdf-engine'
+
+export async function exportResumePdf(doc: ResumeDocument): Promise<PdfExportOutcome> {
+  // The print route loads the doc from storage by id, so keep it saved
+  // before export exactly as the pre-native flow did — harmless for the
+  // native path too.
+  await saveDoc(doc)
+
+  // localStorage.getItem can THROW (sandboxed iframes, strict cookie
+  // blocking, some corporate privacy configs) — a throw here must NOT escape
+  // and skip both export paths. Treat it the same as the flag being unset
+  // (matches src/lib/backup.ts's localStorage guard) so the native path
+  // still runs.
+  let forcePrint = false
+  try {
+    forcePrint = localStorage.getItem(FORCE_PRINT_KEY) === 'print'
+  } catch {
+    /* private mode / blocked storage — fall through to the native path */
+  }
+
+  if (forcePrint) {
+    openPrintWindow(doc.id)
+    return 'print-fallback'
+  }
+
+  try {
+    const bytes = await renderResumePdf(doc)
+    downloadBlob(new Blob([bytes as unknown as BlobPart], { type: 'application/pdf' }), `${pdfBaseName(doc)}.pdf`)
+    return 'native'
+  } catch (e) {
+    // PdfMultiPageUnsupportedError now only fires for the two cases native
+    // genuinely can't handle (native-multipage-pdf plan, task 4): auto-fit ON
+    // still doesn't paginate (by design), or paginate() found no legal
+    // break candidate anywhere. An ordinary multi-page doc with auto-fit OFF
+    // no longer throws here at all — it renders natively above. Both
+    // remaining cases are EXPECTED outcomes, not bugs, so stay quiet.
+    // Anything else is a real renderer failure and must be logged
+    // unconditionally (not just in dev) so a user's bug report carries the
+    // signal.
+    if (!(e instanceof PdfMultiPageUnsupportedError)) {
+      console.error('Native PDF export failed, falling back to print', e)
+    }
+    openPrintWindow(doc.id)
+    return 'print-fallback'
+  }
+}

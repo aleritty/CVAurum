@@ -27,8 +27,7 @@ import type { ResumeDocument } from '@/types/document'
 import { useResumeStore } from '@/store/useResumeStore'
 import { useEditorStore } from '@/store/useEditorStore'
 import { useAppStore } from '@/store/useAppStore'
-import { saveDoc } from '@/lib/storage'
-import { openPrintWindow } from '@/lib/pdf'
+import { exportResumePdf } from '@/lib/pdf/export'
 import { ExportDialog, type ExportFormat } from './ExportDialog'
 import { Logo } from '@/components/ui/Logo'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
@@ -36,7 +35,8 @@ import { ThemeToggle } from '@/components/ui/ThemeToggle'
 export function EditorTopBar({ doc }: { doc: ResumeDocument }) {
   const setTitle = useResumeStore((s) => s.setTitle)
   const dirty = useResumeStore((s) => s.dirty)
-  const { zoom, autoFit, zoomIn, zoomOut, setAutoFit, atsView, setAtsView, previewExact, setPreviewExact } = useEditorStore()
+  const { zoom, autoFit, zoomIn, zoomOut, setAutoFit, atsView, setAtsView, previewExact, setPreviewExact, pdfExporting } =
+    useEditorStore()
 
   const past = useStore(useResumeStore.temporal, (s) => s.pastStates.length)
   const future = useStore(useResumeStore.temporal, (s) => s.futureStates.length)
@@ -60,12 +60,30 @@ export function EditorTopBar({ doc }: { doc: ResumeDocument }) {
     setExportOpen(false)
     setExportFmt(fmt)
   }
-  // PDF is the browser's vector Save-as-PDF (crisp, selectable, identical to the
-  // preview). No in-app filename popup needed — the save dialog names it.
+  // PDF is generated in-app by the native renderer (crisp, selectable, exact —
+  // same DOM/CSS as the preview), and multi-page resumes export natively too
+  // (native-multipage-pdf plan — clean page breaks, no external tooling). No
+  // in-app filename popup needed — the download is named for you. Browser
+  // print is an automatic fallback for the rare doc native genuinely can't
+  // handle (auto-fit on and still overflowing, or no legal page-break
+  // candidate anywhere), so the user always gets an export.
+  //
+  // In-flight guard: the store's `pdfExporting` flag (checked/set
+  // synchronously via getState()/setPdfExporting, not React state) blocks a
+  // second concurrent call — e.g. the Export menu reopening and "Download
+  // PDF" getting clicked again while the first export is still rendering —
+  // which used to fire a duplicate exportResumePdf and double-download. The
+  // dropdown stays open (rather than closing immediately) so the disabled,
+  // busy-labeled button is actually visible while the export runs.
   const exportPdf = async () => {
-    setExportOpen(false)
-    await saveDoc(useResumeStore.getState().doc ?? doc)
-    openPrintWindow(doc.id)
+    if (useEditorStore.getState().pdfExporting) return
+    useEditorStore.getState().setPdfExporting(true)
+    try {
+      await exportResumePdf(useResumeStore.getState().doc ?? doc)
+    } finally {
+      useEditorStore.getState().setPdfExporting(false)
+      setExportOpen(false)
+    }
   }
 
   return (
@@ -196,9 +214,14 @@ export function EditorTopBar({ doc }: { doc: ResumeDocument }) {
             <>
               <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
               <div className="card absolute right-0 z-20 mt-1 w-80 max-w-[calc(100vw-1.5rem)] overflow-hidden p-1.5 shadow-float">
-                <button className="btn-ghost h-auto w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left" onClick={exportPdf}>
-                  <span className="flex items-center gap-2 font-medium"><FileDown className="h-4 w-4 shrink-0 text-primary" /> Download PDF</span>
-                  <span className="pl-6 text-xs font-normal leading-snug text-muted-foreground whitespace-normal">Crisp &amp; selectable — exact, via Save&nbsp;as&nbsp;PDF</span>
+                <button
+                  className="btn-ghost h-auto w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left"
+                  onClick={exportPdf}
+                  disabled={pdfExporting}
+                  aria-busy={pdfExporting}
+                >
+                  <span className="flex items-center gap-2 font-medium"><FileDown className="h-4 w-4 shrink-0 text-primary" /> {pdfExporting ? 'Generating…' : 'Download PDF'}</span>
+                  <span className="pl-6 text-xs font-normal leading-snug text-muted-foreground whitespace-normal">Crisp, selectable, ATS-exact — generated in-app</span>
                 </button>
                 <button className="btn-ghost h-auto w-full flex-col items-start gap-0.5 rounded-lg px-2.5 py-2 text-left" onClick={() => chooseExport('docx')}>
                   <span className="flex items-center gap-2 font-medium"><FileText className="h-4 w-4 shrink-0 text-primary" /> Download Word (.docx)</span>

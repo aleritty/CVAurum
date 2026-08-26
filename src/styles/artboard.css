@@ -178,6 +178,16 @@
   margin-bottom: var(--rm-section-gap);
   position: relative;
 }
+/* Paginated editor (2026-08-17 spec 2): a REAL page gap opens above each
+   page-starting element (data-page-start, set imperatively by
+   ResumePreview's pagination effect) so the page band renders inside
+   created empty space and can never cover content. Additive with the
+   margin-bottom gap scheme above (these elements carry no margin-top of
+   their own). Edit canvas only — print never carries .mode-preview, so
+   export geometry is untouched. */
+.mode-preview [data-page-start] {
+  margin-top: var(--rm-page-gap, 28px);
+}
 .rm-section:last-child {
   margin-bottom: 0;
 }
@@ -208,9 +218,92 @@
 /* narrow sidebar columns: a compact pill floats clear ABOVE the title line —
    never reserve title space (padding made headings break mid-word, breaking
    WYSIWYG between the edit canvas and print) */
-.rm-col-aside .rm-section > .rm-section-gear {
+.rm-col-aside .rm-section > .rm-section-gear,
+.rm-col-aside .rm-section > .rm-section-controls {
   font-size: 9px;
   top: -2.3em;
+}
+
+/* Controls row (edit canvas, body sections only): groups the Style pill with
+   the section's Hide button so they share ONE hover-revealed top-right spot
+   instead of two independently-positioned buttons. HeaderGear renders its own
+   lone .rm-section-gear directly (not wrapped), so it keeps the plain rule
+   above untouched. */
+.rm-section-controls {
+  position: absolute;
+  top: -0.2em;
+  right: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  z-index: 6;
+}
+/* Narrow aside columns: the controls row floats well above its OWN heading
+   (see the -2.3em rule above) to clear the heading text, which puts it right
+   at the boundary of the section-gap above it. On a short section-gap that
+   reach lands ON the PREVIOUS section's last row (its "+ Add x" footer, most
+   often) — the reported crowding. Give aside sections (after the first) a
+   little extra breathing room above; margins collapse with the existing
+   section-gap, so this only ever WIDENS a too-tight gap, never doubles it.
+   Edit canvas only — print never carries .mode-preview, so export spacing
+   (the shared --rm-section-gap) is untouched. */
+.mode-preview .rm-col-aside .rm-section + .rm-section {
+  margin-top: 2.4em;
+}
+.rm-section-controls .rm-section-gear {
+  position: static;
+  top: auto;
+  right: auto;
+}
+.rm-section-hide {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9em;
+  height: 1.9em;
+  border-radius: 9999px;
+  background: var(--rm-bg);
+  border: 1px solid color-mix(in srgb, var(--rm-text) 20%, transparent);
+  color: var(--rm-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.rm-section-hide svg {
+  width: 1em;
+  height: 1em;
+}
+.mode-preview .rm-section-hide {
+  opacity: 0.92;
+  color: color-mix(in srgb, var(--rm-text) 72%, var(--rm-muted));
+}
+.mode-preview .rm-section:hover .rm-section-hide,
+.rm-section-hide:hover,
+.rm-section-hide:focus-visible {
+  opacity: 1;
+}
+.rm-section-hide:hover {
+  color: #b91c1c;
+  border-color: #b91c1c;
+}
+/* Reorder arrows / column swap share the hide button's chrome but must not
+   inherit its danger-red hover — they move, they don't destroy. */
+.rm-section-move:hover {
+  color: var(--rm-primary);
+  border-color: var(--rm-primary);
+}
+.rm-section-grip {
+  cursor: grab;
+}
+.rm-section-grip:active {
+  cursor: grabbing;
+}
+.rm-section-hide:disabled {
+  pointer-events: none;
+}
+.mode-preview .rm-section-hide:disabled,
+.mode-preview .rm-section:hover .rm-section-hide:disabled {
+  opacity: 0.3;
 }
 
 /* on-canvas photo/monogram hide control (edit mode only) */
@@ -368,6 +461,7 @@
 /* ---- generic item ---- */
 .rm-item {
   break-inside: avoid;
+  position: relative;
 }
 .rm-item-head {
   display: flex;
@@ -454,7 +548,7 @@
 }
 
 /* skills */
-.rm-skill-group { margin-bottom: 0.45em; }
+.rm-skill-group { margin-bottom: 0.45em; position: relative; }
 .rm-skill-group:last-child { margin-bottom: 0; }
 .rm-skill-group-name { font-weight: 700; color: var(--rm-text); }
 .rm-skill-inline { color: var(--rm-muted); }
@@ -468,23 +562,102 @@
   font-weight: 500;
 }
 
-/* level meters (skills/languages) */
-.rm-level { display: flex; align-items: center; gap: 8px; }
-.rm-level-track { flex: 1; height: 4px; border-radius: 9999px; background: color-mix(in srgb, currentColor 18%, transparent); overflow: hidden; }
-.rm-level-fill { height: 100%; background: var(--rm-primary); border-radius: inherit; }
-.rm-dots { display: inline-flex; gap: 3px; }
+/* level meters (skills/languages). .rm-level-fill is a <span> — a
+   non-replaced INLINE box — sitting inside .rm-level-track, which is not a
+   flex container. Per CSS, a plain inline box silently ignores both its own
+   `height` and React's inline `style="width: X%"`: it collapses to a real,
+   measured 0x0 and never paints, so filled vs empty always looked identical
+   (a genuine bug in shipped output — screen, print, AND the native PDF
+   exporter, which walks this same DOM/CSS via getBoundingClientRect, so it
+   inherited the 0x0 box too). Fixed the standard way: take the fill out of
+   normal flow and stretch it inside the now-`position: relative` track —
+   the inline `width: X%` then sizes a real box that both the browser and the
+   PDF walker paint correctly. (A `display: inline-block` fill also gets
+   correct CSSOM dimensions, but pixel-sampling showed it still fails to
+   PAINT over the track in this rendering path — position:absolute paints
+   correctly, verified the same way.) */
+/* Meter row layout (Languages, and Skills groups with a rating). Two earlier
+   approaches were tried and both rejected on real content:
+     1. flex-shrink:0 + white-space:nowrap on the label — never wraps, so a
+        long label (a real sample: "Front-of-front-end") or a typed sentence
+        just overflowed the row and bled into the next column.
+     2. keeping nowrap but letting the METER wrap below the label instead —
+        rejected as looking bad; a meter should read as part of its label's
+        line, not a separate row.
+   Final design: the LABEL wraps (whole words only), the METER never does.
+   align-items:flex-start (not center) because the label can now be several
+   lines tall — centering against the whole block would float the meter well
+   below where the eye expects it, beside the first line of text. */
+.rm-level { display: flex; align-items: flex-start; gap: 8px; }
+/* Meter-row labels (.rm-mini-title in Languages, .rm-skill-group-name in
+   Skills). flex-grow stays 0 — NOT flex:1 1 auto (tried first; flex-grow:1
+   stretches the label across the ENTIRE row in a wide main-column context
+   with room to spare, e.g. "Frontend"/"Backend" on the obsidian sample,
+   flinging the meter off to the far right, disconnected from its label).
+   flex-basis:auto (the initial value, left unset) already gives a text item
+   shrink-to-fit sizing: at full width in a roomy row it's simply the label's
+   own natural width (meter sits right beside it, gap:8px, as intended); in a
+   narrow sidebar the SAME shrink-to-fit computation picks a narrower width
+   and the text wraps onto more lines — no flex-grow needed for that part.
+   min-width:0 (the inline minWidth:40%/45% alignment floor sections.tsx used
+   to set is removed — it fought min-width:0, which needs to win for this to
+   work) removes the floor that used to force a squeeze-to-corruption; the
+   label can now shrink/wrap all the way down instead. overflow-wrap/word-
+   break:normal keep mid-word breaks banned — that is what corrupted
+   "Portuguese" into "Portugue"/"se" for PDF text extraction when
+   .rm-col-aside's overflow-wrap:break-word (set for other long content — job
+   titles, links) inherited down into a label squeezed narrower than one
+   unbreakable word. Whole-word wraps stay extraction-safe: a line break in
+   the walked DOM just folds to a space in the extracted text. The one case
+   that still overflows is a SINGLE word wider than the whole sidebar (no
+   valid break point to wrap at) — accepted, not fixed with an ellipsis, since
+   an ellipsis would show different text than what the PDF extracts. */
+.rm-level .rm-mini-title,
+.rm-level .rm-skill-group-name {
+  min-width: 0;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+/* The meter (dots/stars/bar) never wraps or shrinks — it already has its own
+   cap/floor — and sits flush against the label's FIRST line only, via a
+   margin-top nudge from the row's flex-start baseline (tuned by eye per
+   meter: each renders at a different natural height against the same
+   1.4-line-height text row). */
+.rm-dots { display: inline-flex; gap: 3px; flex-shrink: 0; margin-top: calc((1em * var(--rm-lh, 1.4) - 7px) / 2); }
 .rm-dot { width: 7px; height: 7px; border-radius: 9999px; background: color-mix(in srgb, currentColor 22%, transparent); }
 .rm-dot.on { background: var(--rm-primary); }
-.rm-stars { display: inline-flex; gap: 1px; line-height: 1; font-size: 1.05em; }
+.rm-stars {
+  display: inline-flex;
+  gap: 1px;
+  line-height: 1;
+  font-size: 1.05em;
+  flex-shrink: 0;
+  margin-top: calc((1em * var(--rm-lh, 1.4) / 1.05 - 1em) / 2);
+}
 .rm-star { color: color-mix(in srgb, currentColor 24%, transparent); }
 .rm-star.on { color: var(--rm-primary); }
+/* Capped, not flex:1 — a bar meter is a compact scale marker beside the label,
+   same footprint class as the dot/star meters above, not a divider that
+   stretches to fill whatever room the row has (was rendering full-row-wide).
+   flex:0 0 9em (no shrink) — the label absorbs the row's slack now, so the
+   bar just holds its capped width. */
+.rm-level-track {
+  flex: 0 0 9em;
+  height: 4px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  overflow: hidden;
+  position: relative;
+  margin-top: calc((1em * var(--rm-lh, 1.4) - 4px) / 2);
+}
+.rm-level-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--rm-primary); border-radius: inherit; }
 /* keep meters legible on dark sidebars */
 .rm-col-aside .rm-dot.on,
 .rm-col-aside .rm-level-fill { background: currentColor; }
 .rm-col-aside .rm-star.on { color: currentColor; }
 
 /* two-line entries used by aside lists */
-.rm-mini { margin-bottom: var(--rm-item-gap); }
+.rm-mini { margin-bottom: var(--rm-item-gap); position: relative; }
 .rm-mini:last-child { margin-bottom: 0; }
 .rm-mini-title { font-weight: 600; }
 .rm-mini-sub { color: var(--rm-muted); font-size: calc(var(--rm-fs) * 0.92); }
@@ -694,25 +867,46 @@
 .mode-preview .rm-chip-edit {
   display: inline-flex;
   align-items: center;
-  gap: 0.2em;
+  gap: 0.3em;
 }
 .mode-preview .rm-chip-edit .rm-editable {
   outline: none;
   min-width: 0.6em;
 }
+/* The x is its own small ghost-icon circle (same recipe as the item trash
+   button) so it reads as an integrated control, not a bare glyph floating
+   after the word — with a real hover target instead of just opacity. */
 .mode-preview .rm-chip-del {
   cursor: pointer;
   border: none;
   background: transparent;
   color: inherit;
-  font-size: 1.05em;
+  font-size: 1em;
   line-height: 1;
+  width: 1.2em;
+  height: 1.2em;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
   padding: 0;
-  opacity: 0.5;
-  transition: opacity 0.12s ease;
+  opacity: 0.55;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
 }
-.mode-preview .rm-chip-edit:hover .rm-chip-del {
+.mode-preview .rm-chip-edit:hover .rm-chip-del,
+.rm-chip-del:focus-visible {
   opacity: 1;
+}
+.rm-chip-del:hover,
+.rm-chip-del:focus-visible {
+  color: #b91c1c;
+  background: color-mix(in srgb, #ef4444 20%, transparent);
+}
+/* Match the chip's own padding rhythm so "+ skill" sits at the same height as
+   the chips beside it, instead of a slightly mismatched pill in the wrap. */
+.mode-preview .rm-chips-edit .rm-add-btn {
+  padding: 0.14em 0.6em;
 }
 
 /* Inline "Add <entry>" row under each section (editable preview only). */
@@ -738,6 +932,61 @@
 .mode-preview .rm-add-section:hover {
   opacity: 1;
   background: color-mix(in srgb, var(--rm-primary) 12%, transparent);
+}
+
+/* On-canvas item delete (editable preview only): a small ghost trash button
+   that hangs just past the item's right edge — in the page's margin gutter,
+   the same trick the "+ Logo" chip uses on the LEFT (.rm-logo-btn-empty) —
+   so it never reserves layout space inside the item itself. Same ghost-icon
+   recipe as .rm-section-hide/.rm-visual-hide: a circular pill in the page's
+   OWN background color (not a flat dark overlay — that read as a plain dark
+   square on colored sidebars), transparent border until hover/focus. Sized to
+   still clear the 1.6em gap the "Grid" entry layout puts between its columns. */
+.mode-preview .rm-item-del {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  margin-left: 0.3em;
+  width: 1.5em;
+  height: 1.5em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, var(--rm-text) 20%, transparent);
+  color: var(--rm-muted);
+  background: var(--rm-bg);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+  z-index: 5;
+}
+.mode-preview .rm-item-del svg {
+  width: 0.9em;
+  height: 0.9em;
+}
+.mode-preview .rm-item:hover .rm-item-del,
+.mode-preview .rm-mini:hover .rm-item-del,
+.mode-preview .rm-skill-group:hover .rm-item-del,
+.rm-item-del:focus-visible {
+  opacity: 1;
+}
+.rm-item-del:hover,
+.rm-item-del:focus-visible {
+  color: #b91c1c;
+  border-color: #b91c1c;
+  background: color-mix(in srgb, #ef4444 12%, var(--rm-bg));
+}
+
+/* Discoverability hint under an empty section (editable preview only): the
+   ghost placeholder fields look like a real entry, so spell out that nothing
+   here reaches the export until it's filled in. One quiet line, no icon. */
+.mode-preview .rm-empty-hint {
+  margin: 0.15em 0 0;
+  font-size: 0.78em;
+  font-style: italic;
+  color: var(--rm-muted);
+  opacity: 0.8;
 }
 
 /* Inline date picker trigger (editable canvas) */

@@ -92,11 +92,9 @@ function buildContacts(doc: ResumeDocument): ContactEntry[] {
   if (b.url) out.push({ icon: <Globe />, text: prettyUrl(b.url), href: safeHref(b.url) })
   for (const p of b.profiles ?? []) {
     const Icon = networkIcon(p.network)
-    // Keep profiles legible even when the template hides icons: prefer the clean
-    // URL (so LinkedIn vs GitHub is obvious), else show "Network · handle" rather
-    // than a bare, ambiguous username.
+    // Prefer the user-facing label, while keeping older profile data readable.
     const handle = (p.username || '').replace(/^@+/, '')
-    const text = prettyUrl(p.url) || (p.network ? (handle ? `${p.network} · ${handle}` : p.network) : handle)
+    const text = p.text || handle || p.network || prettyUrl(p.url)
     if (text) out.push({ icon: <Icon />, text, href: safeHref(p.url) })
   }
   return out
@@ -152,7 +150,7 @@ function EditableContacts({ doc, edit, icons }: { doc: ResumeDocument; edit: Edi
       {(b.profiles ?? []).map((p, i) => {
         const Icon = networkIcon(p.network)
         const handle = (p.username || '').replace(/^@+/, '')
-        const text = prettyUrl(p.url) || (p.network ? (handle ? `${p.network} · ${handle}` : p.network) : handle)
+        const text = p.text || handle || p.network || prettyUrl(p.url)
         return text ? field(<Icon />, <span>{text}</span>, `p${i}`) : null
       })}
     </div>

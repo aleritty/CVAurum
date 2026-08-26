@@ -118,7 +118,7 @@ function Profiles({ doc }: { doc: ResumeDocument }) {
         {profiles.map((p, i) => (
           <div key={p.id ?? i} className="flex items-center gap-2">
             <input
-              className="input w-28"
+              className="input w-24"
               list="rm-networks"
               value={p.network}
               placeholder="LinkedIn"
@@ -127,15 +127,17 @@ function Profiles({ doc }: { doc: ResumeDocument }) {
             />
             <input
               className="input flex-1"
-              value={p.url || p.username}
-              placeholder="URL or @username"
-              onChange={(e) =>
-                update((c) => {
-                  const val = e.target.value
-                  if (/^https?:\/\//.test(val)) c.basics.profiles![i].url = val
-                  else c.basics.profiles![i].username = val
-                })
-              }
+              value={p.text || p.username}
+              placeholder="Display text"
+              title="Text shown on the resume"
+              onChange={(e) => update((c) => { c.basics.profiles![i].text = e.target.value })}
+            />
+            <input
+              className="input flex-1"
+              value={p.url}
+              placeholder="https://..."
+              title="Link opened when clicked"
+              onChange={(e) => update((c) => { c.basics.profiles![i].url = e.target.value })}
             />
             <button
               type="button"
@@ -150,7 +152,7 @@ function Profiles({ doc }: { doc: ResumeDocument }) {
         <button
           type="button"
           className="btn-ghost btn-sm text-primary hover:bg-primary/10"
-          onClick={() => update((c) => { c.basics.profiles = [...profiles, { id: uid(), network: '', username: '', url: '' }] })}
+          onClick={() => update((c) => { c.basics.profiles = [...profiles, { id: uid(), network: '', text: '', username: '', url: '' }] })}
         >
           <Plus className="h-4 w-4" /> Add profile
         </button>

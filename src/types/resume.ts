@@ -24,6 +24,7 @@ export const LocationSchema = z.object({
 export const ProfileSchema = z.object({
   id: z.string().optional(),
   network: z.string().optional().default(''),
+  text: z.string().optional(),
   username: z.string().optional().default(''),
   url: z.string().optional().default(''),
 })

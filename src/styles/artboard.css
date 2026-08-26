@@ -216,7 +216,10 @@
 /* on-canvas photo/monogram hide control (edit mode only) */
 .rm-visual-wrap {
   position: relative;
-  display: inline-flex;
+  display: flex;
+  justify-content: center;
+  padding-bottom: 1rem;
+
 }
 .rm-visual-hide {
   position: absolute;

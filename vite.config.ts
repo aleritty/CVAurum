@@ -57,6 +57,12 @@ export default defineConfig({
   server: {
     port: 5173,
     open: false,
+    watch: {
+      // Some Linux desktop sessions exhaust the shared inotify pool before Vite starts.
+      // Polling keeps development usable without requiring machine-wide sysctl changes.
+      usePolling: true,
+      interval: 1000,
+    },
   },
   build: {
     target: 'es2021',

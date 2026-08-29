@@ -568,6 +568,7 @@ function ItemFields({
               placeholder="Verify"
             />
           </Row>
+          <LogoPicker label="Issuer logo" value={item.logo} onChange={set('logo')} />
         </>
       )
     case 'awards':

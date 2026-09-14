@@ -45,6 +45,8 @@ export interface TextRun {
    * is always `false` — never touch this rule for actual résumé content.
    */
   isDecorative: boolean
+  /** Nearest ancestor `<a href>` (sanitize.ts already restricts the scheme) — paint.ts turns this into a clickable PDF Link annotation over the run's box. Undefined for plain text. */
+  href?: string
 }
 
 /**

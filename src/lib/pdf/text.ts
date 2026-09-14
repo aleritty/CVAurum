@@ -346,6 +346,7 @@ export function extractRuns(node: Text, root: HTMLElement): TextRun[] {
   const segments = textNodeLineSegments(node)
   if (!segments.length) return []
 
+  const href = parent.closest?.('a[href]')?.getAttribute('href') || undefined
   const metrics = layoutMetricsFor(font)
   const runs: TextRun[] = []
   for (const seg of segments) {
@@ -365,6 +366,7 @@ export function extractRuns(node: Text, root: HTMLElement): TextRun[] {
       letterSpacingPx: cs.letterSpacing === 'normal' ? 0 : parsePx(cs.letterSpacing),
       smallCapsScale,
       isDecorative: false,
+      href,
     })
   }
 

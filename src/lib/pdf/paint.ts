@@ -17,6 +17,7 @@ import {
   PDFNumber,
   PDFOperator,
   PDFOperatorNames,
+  PDFString,
   rgb,
   setTextRenderingMode,
   TextRenderingMode,
@@ -625,6 +626,29 @@ async function paintTrackedHeading(
 }
 
 /**
+ * Adds a clickable PDF Link annotation over a real-content text run that came
+ * from an `<a href>` (extractRuns/text.ts sets `TextRun.href`; sanitize.ts
+ * already restricts the scheme, so `uri` is trusted here). Rect box is a
+ * rough ascent/descent band around the baseline (0.8/0.2 of the font size) —
+ * ponytail: approximate glyph box, tighten with real font metrics if a
+ * template's clickable area ever looks visibly off.
+ */
+function addLinkAnnotation(page: PDFPage, uri: string, xStartPt: number, xEndPt: number, baselineYPt: number, sizePt: number): void {
+  const context = page.doc.context
+  const annot = context.obj({
+    Type: 'Annot',
+    Subtype: 'Link',
+    Rect: [xStartPt, baselineYPt - 0.2 * sizePt, xEndPt, baselineYPt + 0.8 * sizePt],
+    Border: [0, 0, 0],
+    A: { Type: 'Action', S: 'URI', URI: PDFString.of(uri) },
+  })
+  const annotRef = context.register(annot)
+  const existing = page.node.Annots()
+  if (existing) existing.push(annotRef)
+  else page.node.set(PDFName.of('Annots'), context.obj([annotRef]))
+}
+
+/**
  * Paints every op onto `page`. Never throws for a single bad rect/line/image
  * op — but a REAL-CONTENT text op's font resolution (`fonts.embed`) is NEVER
  * swallowed: any error there (missing font, or a genuine embed failure)
@@ -809,11 +833,13 @@ export async function paintOps(
       // 100 whenever neither branch's scaling applied, so this reduces to
       // the old `xPt + embeddedWidthPt` there.
       const nextChainStartXPt: number = snappedToChain ? prevRealEnd!.chainStartXPt : xPt
+      const drawnEndXPt = xPt + embeddedWidthPt * (tzPct / 100)
       prevRealEnd = {
         baselinePx: run.baselinePx,
-        endXPt: xPt + embeddedWidthPt * (tzPct / 100),
+        endXPt: drawnEndXPt,
         chainStartXPt: nextChainStartXPt,
       }
+      if (run.href) addLinkAnnotation(page, run.href, xPt, drawnEndXPt, flipY(pxToPt(run.baselinePx), pageHeightPt), sizePt)
       if (mark) tagSink?.end(page, mark)
       continue
     }

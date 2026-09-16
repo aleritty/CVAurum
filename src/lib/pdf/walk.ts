@@ -4,7 +4,7 @@ import { mainColumnTextFirst } from './readingOrder'
 import { keepFlagsForParagraph, KEEP_WHOLE_MAX_LINES, KEEP_WHOLE_MAX_LINES_TWO_COL } from './widows'
 import { coalesceTextOps } from './coalesce'
 import { collectLinkOps } from './links'
-import { ascentPx, extractRuns, layoutMetricsFor, measureTextWidthPx, textNodeLineSegments } from './text'
+import { ascentPx, extractRuns, measureLaidOutWidthPx, measureTextWidthPx, textNodeLineSegments } from './text'
 import type { CornerRadii, DrawOp, LinearGradient, TextRun } from './types'
 import { combineColumns, type PageBlock } from './paginate'
 import { keepShortSectionsWhole, keepEntryWhole } from './sectionKeep'
@@ -269,7 +269,38 @@ function boxOps(el: HTMLElement, root: HTMLElement, ops: DrawOp[]): void {
   const bg = parseColor(cs.backgroundColor)
   const bgFill = bg && bg.a > 0 ? { ...bg, a: bg.a * opacityMul } : null
   const gradient = parseLinearGradient(cs.backgroundImage)
-  if (gradient) {
+
+  // A ROTATED or skewed element measures as the bounding box of its tilted
+  // shape, so painting `box` as a rect squares it back up AND inflates it by
+  // the tilt (the badge heading chip: a 20.98px square at 45° measures
+  // 25.52px, and that square landed on the heading's first letter). Its own
+  // border-box size plus the composed map give back the shape itself; the
+  // client rect still supplies the centre, which is exact whatever the
+  // transform-origin is, because an affine image of a rectangle is a
+  // parallelogram and a parallelogram's centre is its bounding box's.
+  //
+  // Untransformed elements — everything on the page but a handful of chips —
+  // skip the whole computation: `hasTransform` is four string reads against
+  // the computed style we already hold.
+  const tilt = hasTransform(cs) ? tiltOf(el, cs) : null
+  if (tilt) {
+    if (gradient && import.meta.env.DEV) {
+      console.warn('[pdf] rotated box has a gradient background, painting its solid fill only', el)
+    }
+    transformedBoxOps(
+      el,
+      cs,
+      box.xPx + box.wPx / 2,
+      box.yPx + box.hPx / 2,
+      tilt.size.wPx,
+      tilt.size.hPx,
+      radii,
+      tilt.m,
+      bgFill,
+      opacityMul,
+      ops
+    )
+  } else if (gradient) {
     // background-image paints OVER background-color in CSS paint order —
     // matched here by only emitting the gradient when both are present
     // (never happens in our own CSS today: `background: linear-gradient(…)`
@@ -283,18 +314,47 @@ function boxOps(el: HTMLElement, root: HTMLElement, ops: DrawOp[]): void {
     ops.push({ kind: 'rect', xPx: box.xPx, yPx: box.yPx, wPx: box.wPx, hPx: box.hPx, fill: bgFill, radii })
   }
 
-  borderOps(el, cs, box, radii, opacityMul, ops)
+  // A tilted box's borders went out with its fill, on the same traced path.
+  if (!tilt) borderOps(el, cs, box, radii, opacityMul, ops)
 
   if (el instanceof HTMLImageElement && el.src) {
+    // The picture is painted inside the padding and the border, as CSS
+    // paints a replaced element's content; the background and the border
+    // above already took the whole box. An entry logo carries 0.08em of
+    // padding on its white card, and drawing the mark into the border box
+    // made every mark in the file 8.5% larger than the one on the page
+    // (measured: border box 28.88px, content box 26.63px).
+    const inner = contentBoxOf(box, cs)
     const isSvg = /^data:image\/svg\+xml/i.test(el.src)
-    if (!isSvg || !svgLogoOps(el, box, ops)) {
+    // A rounded <img> clips its picture to the element's own BORDER box (the
+    // photo slot's default shape is a full circle), so the vector path carries
+    // that same rounded box along as a clip. The raster path below already
+    // clips on `radii` inside paint.ts.
+    const clip = hasAnyRadius(radii) ? { ...box, radii } : undefined
+    if (!isSvg || !svgLogoOps(el, inner, ops, clip)) {
       // The element's own object-fit travels with the op: a source the
       // painter has to re-encode is drawn into the box the same way the
       // canvas draws it (paint.ts), rather than always stretched.
       const fit = cs.objectFit === 'cover' || cs.objectFit === 'contain' ? cs.objectFit : undefined
-      ops.push({ kind: 'image', xPx: box.xPx, yPx: box.yPx, wPx: box.wPx, hPx: box.hPx, src: el.src, radii, fit })
+      ops.push({ kind: 'image', xPx: inner.xPx, yPx: inner.yPx, wPx: inner.wPx, hPx: inner.hPx, src: el.src, radii, fit })
     }
   }
+}
+
+/** The box inside an element's border and padding: where CSS paints a
+ *  replaced element's picture. Exported so the arithmetic can be pinned
+ *  against a plain computed-style record without a DOM. A box that padding
+ *  would turn inside out collapses to zero rather than to a negative size. */
+export function contentBoxOf(
+  box: { xPx: number; yPx: number; wPx: number; hPx: number },
+  cs: CSSStyleDeclaration
+): { xPx: number; yPx: number; wPx: number; hPx: number } {
+  const l = parsePx(cs.paddingLeft) + parsePx(cs.borderLeftWidth)
+  const r = parsePx(cs.paddingRight) + parsePx(cs.borderRightWidth)
+  const t = parsePx(cs.paddingTop) + parsePx(cs.borderTopWidth)
+  const b = parsePx(cs.paddingBottom) + parsePx(cs.borderBottomWidth)
+  if (l + r + t + b === 0) return box
+  return { xPx: box.xPx + l, yPx: box.yPx + t, wPx: Math.max(0, box.wPx - l - r), hPx: Math.max(0, box.hPx - t - b) }
 }
 
 /** #rgb / #rrggbb — the only color form our own SVG "logo" marks (see
@@ -329,21 +389,355 @@ function decodeSvgDataUri(src: string): string | null {
 }
 
 /**
- * A tiny "logo" `<img>` whose src is an inline SVG data URI can't be
- * embedded as a raster image the way boxOps normally handles `<img>` — pdf-
- * lib's embedPng/embedJpg only accept real PNG/JPEG bytes, so paint.ts's
- * fetch-and-embed silently no-ops on SVG bytes (confirmed by instrumenting
- * it: the fetch succeeds, the bytes start with `<svg`, and neither magic
- * check matches, so `paintOps` just draws nothing for that op). Rasterising
- * the source to fix that would break the "images embed original bytes,
- * never rasterise" rule for exactly the wrong reason — an SVG source is
- * already vector. Instead, parse the shapes our own sample-data marks
- * actually use (samples.ts's `mark()`: a rounded `<rect>` + a centered
- * `<text>` letter) into native rect/text ops. Anything we can't confidently
- * parse falls through to the ordinary (silently-skipped) image op, so this
- * is never worse than the status quo.
+ * The little of one SVG element the shape walk below needs, with no DOM in it.
+ * `svgLogoOps` adapts a parsed `Element` to this shape, which leaves the walk
+ * itself a pure function a unit test can drive under vitest's plain `node`
+ * environment (no jsdom in this repo — see vitest.config.ts).
  */
-function svgLogoOps(el: HTMLImageElement, box: ReturnType<typeof boxOf>, ops: DrawOp[]): boolean {
+export type SvgNode = { tag: string; attr: (name: string) => string | null; text: string; children: SvgNode[] }
+
+/** One shape the walk resolved: path data in the svg's own user units, with
+ *  its paint already resolved through every ancestor `<g>` and any transform
+ *  already baked into the coordinates. */
+export type SvgResolvedShape = { d: string; fill?: Rgba; stroke?: Rgba; strokeWidthPx: number }
+
+/** Presentation state as it cascades down the tree. `fill`/`stroke`/
+ *  `strokeWidth` are the raw attribute strings (null = never specified, which
+ *  for fill means SVG's own black default); the two *-opacity values are
+ *  inherited properties; `opacity` is a GROUP compositing factor that does not
+ *  inherit but is multiplied down anyway — an approximation that is exact for
+ *  every non-overlapping mark we ship and never silently drops ink. */
+type SvgPaintState = {
+  fill: string | null
+  stroke: string | null
+  strokeWidth: string | null
+  fillOpacity: number
+  strokeOpacity: number
+  opacity: number
+  m: Matrix2D
+}
+
+/** Shapes `svgShapeToPathD` converts. */
+const SVG_LOGO_SHAPES = new Set(['rect', 'circle', 'ellipse', 'path', 'line', 'polygon', 'polyline'])
+/** Metadata-only children: they paint nothing, so skipping them is not a
+ *  partial drawing. */
+const SVG_LOGO_IGNORED = new Set(['title', 'desc', 'metadata'])
+/** Attributes that change what an element paints in ways this painter does not
+ *  reproduce. Their presence refuses the WHOLE image rather than painting a
+ *  shape without them. */
+const SVG_LOGO_REFUSED_ATTRS = [
+  'style',
+  'clip-path',
+  'mask',
+  'filter',
+  'fill-rule',
+  'stroke-dasharray',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+]
+
+const isIdentity2D = (m: Matrix2D): boolean =>
+  Math.abs(m.a - 1) < 1e-9 &&
+  Math.abs(m.b) < 1e-9 &&
+  Math.abs(m.c) < 1e-9 &&
+  Math.abs(m.d - 1) < 1e-9 &&
+  Math.abs(m.e) < 1e-9 &&
+  Math.abs(m.f) < 1e-9
+
+/**
+ * One SVG `transform` ATTRIBUTE (not the CSS property — that grammar is
+ * `parseTransformMatrix`'s) as a matrix, or null when it is anything this
+ * painter cannot bake into path coordinates.
+ *
+ * Supported: `translate`, `scale`, `matrix`, in any order and any number,
+ * composed left-to-right the way SVG applies them. The composed result must
+ * come out DIAGONAL (no rotation, no skew): only then does every path command
+ * — including arcs, whose radii are axis-aligned — survive being rewritten
+ * coordinate by coordinate. A rotate/skew (or a `matrix` that amounts to one)
+ * returns null, which sends the whole image to the raster path rather than
+ * painting it un-rotated.
+ */
+export function parseSvgTransform(value: string): Matrix2D | null {
+  const s = (value || '').trim()
+  if (!s) return IDENTITY_2D
+  const fn = /([a-zA-Z]+)\s*\(([^)]*)\)/g
+  let m = IDENTITY_2D
+  let seen = 0
+  let consumed = 0
+  for (let hit = fn.exec(s); hit; hit = fn.exec(s)) {
+    // Anything between two function calls that is not a separator means the
+    // attribute is not the simple list this understands.
+    if (s.slice(consumed, hit.index).trim() !== '') return null
+    consumed = hit.index + hit[0].length
+    seen++
+    const name = hit[1].toLowerCase()
+    const args = hit[2]
+      .trim()
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .map(Number)
+    if (args.some((n) => !Number.isFinite(n))) return null
+    let next: Matrix2D | null = null
+    if (name === 'translate' && (args.length === 1 || args.length === 2))
+      next = { ...IDENTITY_2D, e: args[0], f: args[1] ?? 0 }
+    else if (name === 'scale' && (args.length === 1 || args.length === 2))
+      next = { ...IDENTITY_2D, a: args[0], d: args[1] ?? args[0] }
+    else if (name === 'matrix' && args.length === 6)
+      next = { a: args[0], b: args[1], c: args[2], d: args[3], e: args[4], f: args[5] }
+    if (!next) return null
+    m = mul2D(m, next)
+  }
+  if (!seen || s.slice(consumed).trim() !== '') return null
+  if (Math.abs(m.b) > 1e-9 || Math.abs(m.c) > 1e-9) return null
+  if (!Number.isFinite(m.a) || !Number.isFinite(m.d) || m.a === 0 || m.d === 0) return null
+  return m
+}
+
+/** Command letter -> how many numbers one of its argument groups takes. */
+const SVG_PATH_ARGC: Record<string, number> = { m: 2, l: 2, h: 1, v: 1, c: 6, s: 4, q: 4, t: 2, a: 7, z: 0 }
+
+/**
+ * Rewrites a path's `d` with a DIAGONAL map baked into its coordinates, so the
+ * emitted op needs no transform of its own (the `svg` DrawOp carries none —
+ * see types.ts). Relative commands stay relative and take only the map's
+ * SCALE; absolute commands take scale and translation both, which is why a
+ * leading lowercase `m` — absolute per the SVG grammar despite its case — must
+ * be normalised by `absolutizeLeadingMoveto` before this sees it.
+ *
+ * Arc radii are axis-aligned lengths, so they scale per axis; a negative scale
+ * mirrors the shape and therefore flips the sweep flag. An arc carrying its own
+ * x-axis-rotation under a NON-uniform scale becomes an ellipse of a different
+ * tilt, which this does not attempt: null, and the caller falls back.
+ *
+ * Returns null for a `d` it cannot lex (an unknown command letter, a truncated
+ * argument group) rather than emitting a half-transformed path.
+ */
+export function transformPathD(pathD: string, m: Matrix2D): string | null {
+  if (Math.abs(m.b) > 1e-9 || Math.abs(m.c) > 1e-9) return null
+  const sx = m.a
+  const sy = m.d
+  if (!Number.isFinite(sx) || !Number.isFinite(sy) || sx === 0 || sy === 0) return null
+  // expandArcFlags first: SVG lets an arc's two 0/1 flags pack against the next
+  // number with no separator, and a generic number lexer reads `011.5` as one.
+  const tokens = expandArcFlags(pathD).match(/[MmLlHhVvCcSsQqTtAaZz]|[+-]?(?:\d*\.\d+|\d+\.?)(?:[eE][+-]?\d+)?/g)
+  if (!tokens || !tokens.length) return null
+  const isLetter = (t: string): boolean => /^[A-Za-z]$/.test(t)
+  const n4 = (v: number): string => String(Math.round(v * 1e4) / 1e4)
+  const out: string[] = []
+  let cmd = ''
+  let i = 0
+  while (i < tokens.length) {
+    if (isLetter(tokens[i])) {
+      cmd = tokens[i]
+      out.push(cmd)
+      i++
+      if (cmd === 'z' || cmd === 'Z') continue
+    } else {
+      // An implicit repeat of the previous command; after a moveto the
+      // repeats are linetos, of the same case.
+      if (!cmd) return null
+      if (cmd === 'M') cmd = 'L'
+      else if (cmd === 'm') cmd = 'l'
+      if (cmd === 'z' || cmd === 'Z') return null
+    }
+    const key = cmd.toLowerCase()
+    const argc = SVG_PATH_ARGC[key]
+    if (argc === undefined) return null
+    if (argc === 0) continue
+    const args: number[] = []
+    for (let k = 0; k < argc; k++) {
+      const t = tokens[i + k]
+      if (t === undefined || isLetter(t) || !Number.isFinite(Number(t))) return null
+      args.push(Number(t))
+    }
+    i += argc
+    const rel = cmd === key
+    const X = (v: number): number => (rel ? sx * v : sx * v + m.e)
+    const Y = (v: number): number => (rel ? sy * v : sy * v + m.f)
+    if (key === 'h') out.push(n4(X(args[0])))
+    else if (key === 'v') out.push(n4(Y(args[0])))
+    else if (key === 'a') {
+      const [rx, ry, rot, laf, sf, x, y] = args
+      if (rot !== 0 && Math.abs(Math.abs(sx) - Math.abs(sy)) > 1e-9) return null
+      const mirrored = sx * sy < 0
+      out.push(
+        n4(Math.abs(sx) * rx),
+        n4(Math.abs(sy) * ry),
+        n4(rot),
+        laf ? '1' : '0',
+        (mirrored ? !sf : !!sf) ? '1' : '0',
+        n4(X(x)),
+        n4(Y(y))
+      )
+    } else {
+      for (let k = 0; k < argc; k += 2) out.push(n4(X(args[k])), n4(Y(args[k + 1])))
+    }
+  }
+  return out.join(' ')
+}
+
+/** SVG paint resolved to a colour, to "paints nothing", or to a refusal. */
+type SvgPaintResult = { ok: false } | { ok: true; color: Rgba | null }
+
+/** `#rgb`/`#rrggbb`, `none`/`transparent`, or — for a value this painter has
+ *  no honest answer for (a gradient `url(#id)`, `currentColor`, a CSS colour
+ *  keyword) — a refusal, which sends the whole image to the raster path. */
+function svgPaintColor(value: string | null, alphaMul: number, defaultsToBlack: boolean): SvgPaintResult {
+  const raw = value === null ? (defaultsToBlack ? '#000000' : null) : value.trim()
+  if (raw === null || raw === '' || /^(none|transparent)$/i.test(raw)) return { ok: true, color: null }
+  const c = parseHexColor(raw)
+  if (!c) return { ok: false }
+  return { ok: true, color: { ...c, a: Math.max(0, Math.min(1, c.a * alphaMul)) } }
+}
+
+/** The child's own presentation attributes cascaded onto the parent's state,
+ *  or null when one of them is unusable. */
+function inheritSvgPaint(parent: SvgPaintState, node: SvgNode): SvgPaintState | null {
+  const unitInterval = (name: string, fallback: number): number | null => {
+    const v = node.attr(name)
+    if (v === null) return fallback
+    const n = parseFloat(v)
+    if (!Number.isFinite(n)) return null
+    return Math.max(0, Math.min(1, n))
+  }
+  const fillOpacity = unitInterval('fill-opacity', parent.fillOpacity)
+  const strokeOpacity = unitInterval('stroke-opacity', parent.strokeOpacity)
+  const own = unitInterval('opacity', 1)
+  if (fillOpacity === null || strokeOpacity === null || own === null) return null
+  const t = node.attr('transform')
+  let m = parent.m
+  if (t !== null) {
+    const mine = parseSvgTransform(t)
+    if (!mine) return null
+    m = mul2D(parent.m, mine)
+  }
+  return {
+    fill: node.attr('fill') ?? parent.fill,
+    stroke: node.attr('stroke') ?? parent.stroke,
+    strokeWidth: node.attr('stroke-width') ?? parent.strokeWidth,
+    fillOpacity,
+    strokeOpacity,
+    opacity: parent.opacity * own,
+    m,
+  }
+}
+
+/**
+ * Every paintable shape under an `<svg>`, in document order, with `<g>`
+ * inheritance and transforms resolved — or NULL when the tree contains
+ * anything this painter does not fully reproduce.
+ *
+ * All-or-nothing is the whole point. The previous version walked only the
+ * svg's DIRECT children and only six shape kinds, then returned "drawn" if it
+ * had recognised ANY of them: the library's drawn portraits (avatar.ts) are an
+ * `<ellipse>` head and a `<g>` of glasses among ordinary paths and circles, so
+ * every example résumé that shows a face exported the backdrop, the hair and
+ * the eyes with no head under them. A partial drawing is the worst outcome
+ * available — it looks like ink to every gate that only asks whether the box
+ * is empty — so anything unrecognised now refuses the image outright and
+ * paint.ts redraws the source through a canvas instead (`transcodeBytes`).
+ */
+export function svgShapeWalk(root: SvgNode): { shapes: SvgResolvedShape[]; texts: SvgNode[] } | null {
+  const shapes: SvgResolvedShape[] = []
+  const texts: SvgNode[] = []
+  const visit = (node: SvgNode, inherited: SvgPaintState): boolean => {
+    for (const child of node.children) {
+      const tag = child.tag.toLowerCase()
+      if (SVG_LOGO_IGNORED.has(tag)) continue
+      for (const name of SVG_LOGO_REFUSED_ATTRS) if (child.attr(name) !== null) return false
+      const state = inheritSvgPaint(inherited, child)
+      if (!state) return false
+      if (tag === 'g') {
+        if (!visit(child, state)) return false
+        continue
+      }
+      if (tag === 'text') {
+        // The mark's monogram letter, drawn by the caller with the DOCUMENT's
+        // own font. One, untransformed, is the whole of what is supported.
+        if (texts.length || !isIdentity2D(state.m)) return false
+        texts.push(child)
+        continue
+      }
+      if (!SVG_LOGO_SHAPES.has(tag)) return false
+      const raw = svgShapeToPathD(tag, (name) => child.attr(name))
+      // A shape with no usable geometry (r=0, a `<path>` with no `d`) paints
+      // nothing in a browser either, so skipping it loses no ink.
+      if (!raw) continue
+      const fill = svgPaintColor(state.fill, state.opacity * state.fillOpacity, true)
+      if (!fill.ok) return false
+      const stroke = svgPaintColor(state.stroke, state.opacity * state.strokeOpacity, false)
+      if (!stroke.ok) return false
+      const widthAttr = state.strokeWidth === null ? 1 : parseFloat(state.strokeWidth)
+      if (!Number.isFinite(widthAttr) || widthAttr < 0) return false
+      // A stroke under a non-uniform scale is an elliptical pen, which a
+      // single PDF line width cannot express.
+      if (stroke.color && widthAttr > 0 && Math.abs(Math.abs(state.m.a) - Math.abs(state.m.d)) > 1e-9) return false
+      const strokeColor = stroke.color && widthAttr > 0 ? stroke.color : undefined
+      if (!fill.color && !strokeColor) continue
+      let d = raw
+      if (!isIdentity2D(state.m)) {
+        const baked = transformPathD(absolutizeLeadingMoveto(raw), state.m)
+        if (!baked) return false
+        d = baked
+      }
+      shapes.push({
+        d,
+        fill: fill.color ?? undefined,
+        stroke: strokeColor,
+        strokeWidthPx: strokeColor ? widthAttr * Math.abs(state.m.a) : 0,
+      })
+    }
+    return true
+  }
+  const base: SvgPaintState = {
+    fill: null,
+    stroke: null,
+    strokeWidth: null,
+    fillOpacity: 1,
+    strokeOpacity: 1,
+    opacity: 1,
+    m: IDENTITY_2D,
+  }
+  const rootState = inheritSvgPaint(base, root)
+  if (!rootState) return null
+  for (const name of SVG_LOGO_REFUSED_ATTRS) if (root.attr(name) !== null) return null
+  if (!visit(root, rootState)) return null
+  return { shapes, texts }
+}
+
+/** Adapts a parsed SVG `Element` tree to the DOM-free shape `svgShapeWalk`
+ *  takes. */
+function elementToSvgNode(el: Element): SvgNode {
+  return {
+    tag: el.tagName.toLowerCase(),
+    attr: (name) => el.getAttribute(name),
+    text: el.textContent ?? '',
+    children: Array.from(el.children).map(elementToSvgNode),
+  }
+}
+
+/**
+ * A "logo" or portrait `<img>` whose src is an inline SVG data URI can't be
+ * embedded as a raster image the way boxOps normally handles `<img>` — pdf-
+ * lib's embedPng/embedJpg only accept real PNG/JPEG bytes. Rather than
+ * rasterise an already-vector source, the shapes are walked into native `svg`
+ * ops (one per shape, in the viewBox's own units, so paint.ts scales the path
+ * and its stroke width together) plus one optional text op for a monogram
+ * letter.
+ *
+ * Returns false — and paints NOTHING — for any source it does not fully
+ * reproduce, so boxOps falls through to the ordinary image op and paint.ts
+ * redraws the source through a canvas (`transcodeBytes`, which decodes an
+ * SVG data URI with no external references perfectly well). See
+ * `svgShapeWalk` for why all-or-nothing is the only safe contract here.
+ */
+export function svgLogoOps(
+  el: HTMLImageElement,
+  box: ReturnType<typeof boxOf>,
+  ops: DrawOp[],
+  clip?: { xPx: number; yPx: number; wPx: number; hPx: number; radii: CornerRadii }
+): boolean {
   const xml = decodeSvgDataUri(el.src)
   if (!xml) return false
 
@@ -364,31 +758,33 @@ function svgLogoOps(el: HTMLImageElement, box: ReturnType<typeof boxOf>, ops: Dr
   const scaleX = box.wPx / vbW
   const scaleY = box.hPx / vbH
 
-  const rectEl = svg.querySelector('rect')
-  const textEl = svg.querySelector('text')
-  if (!rectEl && !textEl) return false
+  const walked = svgShapeWalk(elementToSvgNode(svg))
+  if (!walked) return false
+  const textEl = walked.texts[0]
+  const label = textEl?.text.trim() ?? ''
+  if (!walked.shapes.length && !label) return false
 
-  if (rectEl) {
-    const fill = parseHexColor(rectEl.getAttribute('fill') || '')
-    const wPx = parseFloat(rectEl.getAttribute('width') || '0') * scaleX
-    const hPx = parseFloat(rectEl.getAttribute('height') || '0') * scaleY
-    if (fill && wPx > 0 && hPx > 0) {
-      const radiusPx = parseFloat(rectEl.getAttribute('rx') || rectEl.getAttribute('ry') || '0') * scaleX
-      ops.push({
-        kind: 'rect',
-        xPx: box.xPx + (parseFloat(rectEl.getAttribute('x') || '0') - vbX) * scaleX,
-        yPx: box.yPx + (parseFloat(rectEl.getAttribute('y') || '0') - vbY) * scaleY,
-        wPx,
-        hPx,
-        fill,
-        radiusPx,
-      })
-    }
+  // Nothing is pushed onto the caller's list until the whole image is known to
+  // be reproducible: a half-painted mark is worse than a redrawn one.
+  const drawn: DrawOp[] = []
+  for (const shape of walked.shapes) {
+    drawn.push({
+      kind: 'svg',
+      xPx: box.xPx,
+      yPx: box.yPx,
+      wPx: box.wPx,
+      hPx: box.hPx,
+      viewBox: [vbX, vbY, vbW, vbH],
+      d: shape.d,
+      fill: shape.fill,
+      stroke: shape.stroke,
+      strokeWidthPx: shape.strokeWidthPx,
+      clip,
+    })
   }
 
-  const label = textEl?.textContent?.trim()
   if (textEl && label) {
-    const sizePx = parseFloat(textEl.getAttribute('font-size') || '0') * scaleY
+    const sizePx = parseFloat(textEl.attr('font-size') || '0') * scaleY
     if (sizePx > 0) {
       // Draw with the DOCUMENT's own font, not the SVG's declared one (our
       // marks say Arial) — only the résumé's chosen fonts get embedded in
@@ -396,21 +792,21 @@ function svgLogoOps(el: HTMLImageElement, box: ReturnType<typeof boxOf>, ops: Dr
       // export time (PdfFontMissingError) instead of just looking slightly
       // off.
       const family = getComputedStyle(el).fontFamily
-      const weight = parseFontWeight(textEl.getAttribute('font-weight') || '400')
+      const weight = parseFontWeight(textEl.attr('font-weight') || '400')
       const font = `${weight} ${sizePx}px ${family}`
       const width = measureTextWidthPx(label, font)
-      const cx = box.xPx + (parseFloat(textEl.getAttribute('x') || '0') - vbX) * scaleX
-      const anchor = textEl.getAttribute('text-anchor')
+      const cx = box.xPx + (parseFloat(textEl.attr('x') || '0') - vbX) * scaleX
+      const anchor = textEl.attr('text-anchor')
       const xPx = anchor === 'middle' ? cx - width / 2 : anchor === 'end' ? cx - width : cx
-      const baselinePx = box.yPx + (parseFloat(textEl.getAttribute('y') || '0') - vbY) * scaleY
-      const fill = parseHexColor(textEl.getAttribute('fill') || '') || { r: 1, g: 1, b: 1, a: 1 }
+      const baselinePx = box.yPx + (parseFloat(textEl.attr('y') || '0') - vbY) * scaleY
+      const fill = parseHexColor(textEl.attr('fill') || '') || { r: 1, g: 1, b: 1, a: 1 }
       // DECORATIVE: this is the logo mark's monogram letter, not résumé
       // content — paint.ts draws it as vector glyph outlines so it can't
       // leak into the extractable text layer (see types.ts's TextRun.isDecorative).
       // widthPx: 0 — no measured DOM rect backs this synthesized run (see
       // types.ts's TextRun.widthPx); it's also isDecorative so paint.ts's
       // Tz scaling never looks at it anyway.
-      ops.push({
+      drawn.push({
         kind: 'text',
         run: {
           text: label,
@@ -429,6 +825,8 @@ function svgLogoOps(el: HTMLImageElement, box: ReturnType<typeof boxOf>, ops: Dr
     }
   }
 
+  if (!drawn.length) return false
+  ops.push(...drawn)
   return true
 }
 
@@ -600,14 +998,375 @@ export function pseudoBox(
  *  host box, which is where the content is inserted in normal flow. Native
  *  `<li>` bullets are a completely different mechanism (see markerOps) —
  *  browsers never surface those through ::before. */
-/** Rotation (deg) and the translation the computed `transform` matrix applies
- *  to the BOX CENTER (transform-origin defaults to the center, so rotation
- *  never moves it and the matrix translation column IS the center shift). */
-export function parseTransform(transform: string): { rotationDeg: number; dxPx: number; dyPx: number } {
-  const m = /^matrix\(([^)]+)\)$/.exec(transform || '')
-  if (!m) return { rotationDeg: 0, dxPx: 0, dyPx: 0 }
-  const [a, b, , , e, f] = m[1].split(',').map((v) => parseFloat(v.trim()))
-  return { rotationDeg: (Math.atan2(b, a) * 180) / Math.PI, dxPx: e || 0, dyPx: f || 0 }
+/**
+ * A 2D affine map in CSS px, columns first like CSS's own `matrix()`:
+ * `x' = a·x + c·y + e`, `y' = b·x + d·y + f`.
+ */
+export type Matrix2D = { a: number; b: number; c: number; d: number; e: number; f: number }
+
+const IDENTITY_2D: Matrix2D = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }
+
+/** `m` then `n` — i.e. `n` applies to a point FIRST (m · n, as CSS composes). */
+function mul2D(m: Matrix2D, n: Matrix2D): Matrix2D {
+  return {
+    a: m.a * n.a + m.c * n.b,
+    b: m.b * n.a + m.d * n.b,
+    c: m.a * n.c + m.c * n.d,
+    d: m.b * n.c + m.d * n.d,
+    e: m.a * n.e + m.c * n.f + m.e,
+    f: m.b * n.e + m.d * n.f + m.f,
+  }
+}
+
+/** The computed `transform` property alone. Chromium always serializes it as
+ *  `none`, `matrix(...)` or `matrix3d(...)` — never as the author's function
+ *  list — so those three are the whole grammar to handle. A matrix3d keeps
+ *  only its 2D sub-matrix (m11/m12/m21/m22/m41/m42); a real perspective
+ *  transform has no flat equivalent and is not attempted. */
+export function parseTransformMatrix(transform: string): Matrix2D {
+  const s = (transform || '').trim()
+  const m = /^matrix(3d)?\(([^)]+)\)$/.exec(s)
+  if (!m) return IDENTITY_2D
+  const n = m[2].split(',').map((v) => parseFloat(v.trim()))
+  const pick = m[1] ? [n[0], n[1], n[4], n[5], n[12], n[13]] : [n[0], n[1], n[2], n[3], n[4], n[5]]
+  if (pick.some((v) => !Number.isFinite(v))) return IDENTITY_2D
+  return { a: pick[0], b: pick[1], c: pick[2], d: pick[3], e: pick[4], f: pick[5] }
+}
+
+/** One CSS `<angle>` in degrees; 0 for anything unitless or unparseable. */
+function parseAngleDeg(token: string): number {
+  const m = /^([+-]?[\d.eE+-]+)(deg|rad|grad|turn)$/.exec((token || '').trim())
+  if (!m) return 0
+  const n = parseFloat(m[1])
+  if (!Number.isFinite(n)) return 0
+  if (m[2] === 'rad') return (n * 180) / Math.PI
+  if (m[2] === 'grad') return n * 0.9
+  if (m[2] === 'turn') return n * 360
+  return n
+}
+
+/**
+ * The INDIVIDUAL `rotate` property, in degrees about z. This is the property
+ * the badge section-heading chip actually uses (`rotate: 45deg` in
+ * templates.css) — measured on a real export chip, its computed `transform`
+ * is a pure `matrix(1,0,0,1,0,-10.49)` translate and the whole 45° lives
+ * here, which is why the painter used to lose it and square the diamond off.
+ *
+ * Chromium serializes this as `none`, `<angle>`, `<axis-name> <angle>` or
+ * `<x> <y> <z> <angle>`. Only rotation about z stays in the page plane; a
+ * rotation about x or y foreshortens the box into something a flat painter
+ * has no honest answer for, so those report 0 (the box paints unrotated)
+ * rather than a wrong angle.
+ */
+export function parseRotateProp(rotate: string): number {
+  const t = (rotate || '').trim().split(/\s+/).filter(Boolean)
+  if (!t.length || t[0] === 'none') return 0
+  const deg = parseAngleDeg(t[t.length - 1])
+  if (t.length === 1) return deg
+  if (t.length === 2) return t[0] === 'z' ? deg : 0
+  if (t.length === 4) {
+    const [x, y, z] = t.slice(0, 3).map(Number)
+    return x === 0 && y === 0 && z !== 0 ? (z > 0 ? deg : -deg) : 0
+  }
+  return 0
+}
+
+/** The individual `scale` property: `none`, one value (both axes), or two/
+ *  three (the z factor is dropped — it changes nothing on a flat page). */
+export function parseScaleProp(scale: string): { x: number; y: number } {
+  const t = (scale || '').trim().split(/\s+/).filter(Boolean)
+  if (!t.length || t[0] === 'none') return { x: 1, y: 1 }
+  const num = (s: string): number => {
+    const n = s.endsWith('%') ? parseFloat(s) / 100 : parseFloat(s)
+    return Number.isFinite(n) ? n : 1
+  }
+  const x = num(t[0])
+  return { x, y: t.length > 1 ? num(t[1]) : x }
+}
+
+/** The individual `translate` property. Percentages are kept as percentages
+ *  by the computed value (verified against Chromium) and resolve against the
+ *  element's OWN border box — width for x, height for y, per the spec. */
+export function parseTranslateProp(translate: string, wPx: number, hPx: number): { x: number; y: number } {
+  const t = (translate || '').trim().split(/\s+/).filter(Boolean)
+  if (!t.length || t[0] === 'none') return { x: 0, y: 0 }
+  const len = (s: string, basisPx: number): number => {
+    const n = parseFloat(s)
+    if (!Number.isFinite(n)) return 0
+    return s.endsWith('%') ? (n / 100) * basisPx : n
+  }
+  return { x: len(t[0], wPx), y: t.length > 1 ? len(t[1], hPx) : 0 }
+}
+
+/**
+ * The element's FULL computed transform: the individual `translate`,
+ * `rotate` and `scale` properties composed with the `transform` property, in
+ * the order CSS Transforms Level 2 mandates — translate, then rotate, then
+ * scale, then `transform`, all about the same transform-origin.
+ *
+ * Order matters and is not a guess: measured on Chromium with a 40×20 box at
+ * `transform: translateY(-10px); rotate: 45deg; scale: 0.5`, the painted box
+ * centre moved by (+3.54, −3.54), which is `rotate·scale` applied to the
+ * transform's own (0, −10) — NOT (0, −10) itself. Reading `transform` alone
+ * (as this module used to) therefore gets both the angle AND the offset
+ * wrong the moment an individual property is in play.
+ */
+export function composedTransform(cs: CSSStyleDeclaration, wPx: number, hPx: number): Matrix2D {
+  const t = parseTranslateProp(cs.translate, wPx, hPx)
+  const deg = parseRotateProp(cs.rotate)
+  const s = parseScaleProp(cs.scale)
+  const rad = (deg * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const T: Matrix2D = { ...IDENTITY_2D, e: t.x, f: t.y }
+  const R: Matrix2D = { a: cos, b: sin, c: -sin, d: cos, e: 0, f: 0 }
+  const S: Matrix2D = { ...IDENTITY_2D, a: s.x, d: s.y }
+  return mul2D(mul2D(mul2D(T, R), S), parseTransformMatrix(cs.transform))
+}
+
+/** True when the map leaves the box's edges parallel to the page's — the only
+ *  case in which an element's measured client rect IS the shape it paints,
+ *  and so the only case a plain `rect` op can express. */
+export function isAxisAligned(m: Matrix2D): boolean {
+  return Math.abs(m.b) < 1e-4 && Math.abs(m.c) < 1e-4
+}
+
+/** The uniform scale factor of a map that is a rotation times a scale and
+ *  nothing else, or null when it also skews or scales the two axes apart.
+ *  Circular corner arcs survive such a map unchanged except for that one
+ *  factor; under anything else they become ellipse arcs this module does not
+ *  attempt, and the corners are painted sharp instead. */
+function similarityScale(m: Matrix2D): number | null {
+  if (Math.abs(m.a - m.d) > 1e-4 || Math.abs(m.b + m.c) > 1e-4) return null
+  const k = Math.hypot(m.a, m.b)
+  return k > 0 ? k : null
+}
+
+const round4 = (n: number): number => Math.round(n * 1e4) / 1e4
+
+/** CSS's own overlapping-radii rule: if two radii on one edge together exceed
+ *  it, every radius shrinks by the same factor until none does. */
+function clampRadii(radii: CornerRadii, wPx: number, hPx: number): CornerRadii {
+  const f = Math.min(
+    1,
+    wPx / (radii.tl + radii.tr) || 1,
+    wPx / (radii.bl + radii.br) || 1,
+    hPx / (radii.tl + radii.bl) || 1,
+    hPx / (radii.tr + radii.br) || 1
+  )
+  const s = Number.isFinite(f) ? Math.max(0, Math.min(1, f)) : 1
+  return { tl: radii.tl * s, tr: radii.tr * s, br: radii.br * s, bl: radii.bl * s }
+}
+
+/**
+ * The path a `wPx × hPx` rounded box paints once `m`'s linear part has turned
+ * it — a diamond for the 45° badge chip, a parallelogram for a skew, the box
+ * itself for a plain scale. Returned in the coordinate space of the shape's
+ * own axis-aligned bounding box (origin at its top-left), together with where
+ * that bounding box sits relative to the shape's CENTRE, so a caller that
+ * knows the centre (a real element reads it off its client rect; a pseudo
+ * computes it) can place the op without repeating the geometry.
+ *
+ * Corner radii ride along whenever `m` is a rotation-and-uniform-scale, which
+ * keeps a circular arc circular: same sweep (a rotation never mirrors), only
+ * the radius scaled. Under a skew or an uneven scale they would become
+ * ellipse arcs of a different tilt, so the corners go sharp rather than
+ * wrong.
+ */
+export function transformedBoxPath(
+  wPx: number,
+  hPx: number,
+  radii: CornerRadii,
+  m: Matrix2D
+): { d: string; offsetXPx: number; offsetYPx: number; wPx: number; hPx: number } | null {
+  if (!(wPx > 0) || !(hPx > 0)) return null
+  const k = similarityScale(m)
+  const r = k === null ? { tl: 0, tr: 0, br: 0, bl: 0 } : clampRadii(radii, wPx, hPx)
+  const halfW = wPx / 2
+  const halfH = hPx / 2
+  // Local coordinates, origin at the box centre, y down (CSS px and svg user
+  // units agree on that, so the path needs no flip).
+  const p = (x: number, y: number): [number, number] => [m.a * x + m.c * y, m.b * x + m.d * y]
+  const corners: Array<[number, number]> = [
+    p(-halfW, -halfH),
+    p(halfW, -halfH),
+    p(halfW, halfH),
+    p(-halfW, halfH),
+  ]
+  // Rounding only ever cuts INTO the sharp box, so the four transformed
+  // corners still bound the rounded shape.
+  const minX = Math.min(...corners.map((c) => c[0]))
+  const minY = Math.min(...corners.map((c) => c[1]))
+  const maxX = Math.max(...corners.map((c) => c[0]))
+  const maxY = Math.max(...corners.map((c) => c[1]))
+  const at = (x: number, y: number): string => {
+    const [tx, ty] = p(x, y)
+    return `${round4(tx - minX)} ${round4(ty - minY)}`
+  }
+  const arc = (radiusPx: number, x: number, y: number): string =>
+    `A ${round4(radiusPx * (k ?? 1))} ${round4(radiusPx * (k ?? 1))} 0 0 1 ${at(x, y)}`
+
+  const d =
+    `M ${at(-halfW + r.tl, -halfH)} L ${at(halfW - r.tr, -halfH)} ` +
+    (r.tr > 0 ? `${arc(r.tr, halfW, -halfH + r.tr)} ` : '') +
+    `L ${at(halfW, halfH - r.br)} ` +
+    (r.br > 0 ? `${arc(r.br, halfW - r.br, halfH)} ` : '') +
+    `L ${at(-halfW + r.bl, halfH)} ` +
+    (r.bl > 0 ? `${arc(r.bl, -halfW, halfH - r.bl)} ` : '') +
+    `L ${at(-halfW, -halfH + r.tl)} ` +
+    (r.tl > 0 ? `${arc(r.tl, -halfW + r.tl, -halfH)} ` : '') +
+    'Z'
+  return { d, offsetXPx: minX, offsetYPx: minY, wPx: maxX - minX, hPx: maxY - minY }
+}
+
+/**
+ * Background and border for a box the page's transforms have ROTATED or
+ * SKEWED, painted as the shape it actually is. Everything else in this module
+ * draws boxes as axis-aligned `rect` ops, which is exactly right until a
+ * transform tilts one: the badge heading chip (`rotate: 45deg`) and the
+ * diamond monogram (`transform: rotate(45deg)`) are squares on their side,
+ * and a `rect` op squares them back up — bigger than the real chip by its
+ * diagonal, and over the heading's first letter (measured: a 20.98px chip
+ * painted as a 25.52px square sitting on the "S" of "Summary").
+ *
+ * `centreXPx/centreYPx` is where the SHAPE's centre lands on the page,
+ * `wPx/hPx` its UNtransformed border-box size. A single stroked-and-filled
+ * path carries both fill and border, so the border follows the tilt too;
+ * mixed per-edge borders have no one centreline to trace and are dropped with
+ * a dev warning rather than painted as four unrotated lines.
+ */
+function transformedBoxOps(
+  el: Element,
+  cs: CSSStyleDeclaration,
+  centreXPx: number,
+  centreYPx: number,
+  wPx: number,
+  hPx: number,
+  radii: CornerRadii,
+  m: Matrix2D,
+  fill: Rgba | null,
+  opacityMul: number,
+  ops: DrawOp[]
+): void {
+  const edges = BORDER_EDGES.map((edge) => readBorderEdge(cs, edge.side.toLowerCase()))
+  const first = edges[0]
+  const uniformBorder =
+    first &&
+    edges.every(
+      (e) =>
+        e &&
+        e.width === first.width &&
+        e.style === first.style &&
+        e.color.r === first.color.r &&
+        e.color.g === first.color.g &&
+        e.color.b === first.color.b &&
+        e.color.a === first.color.a
+    )
+      ? first
+      : null
+  if (!uniformBorder && edges.some(Boolean) && import.meta.env.DEV) {
+    console.warn('[pdf] rotated box has mixed per-edge borders, dropping them', el)
+  }
+
+  if (fill) {
+    const path = transformedBoxPath(wPx, hPx, radii, m)
+    if (path) {
+      ops.push({
+        kind: 'svg',
+        xPx: centreXPx + path.offsetXPx,
+        yPx: centreYPx + path.offsetYPx,
+        wPx: path.wPx,
+        hPx: path.hPx,
+        viewBox: [0, 0, path.wPx, path.hPx],
+        d: path.d,
+        fill,
+        stroke: undefined,
+        strokeWidthPx: 0,
+      })
+    }
+  }
+
+  if (!uniformBorder) return
+  // CSS paints a border INSIDE the box, pdf-lib strokes centred — so the
+  // stroked path is the box shrunk by one border width, exactly the width/2
+  // inset the straight-line border path uses (BORDER_EDGES).
+  const bw = uniformBorder.width
+  const k = similarityScale(m) ?? 1
+  const inset = bw / 2
+  const path = transformedBoxPath(
+    wPx - bw,
+    hPx - bw,
+    {
+      tl: Math.max(0, radii.tl - inset),
+      tr: Math.max(0, radii.tr - inset),
+      br: Math.max(0, radii.br - inset),
+      bl: Math.max(0, radii.bl - inset),
+    },
+    m
+  )
+  if (!path) return
+  ops.push({
+    kind: 'svg',
+    xPx: centreXPx + path.offsetXPx,
+    yPx: centreYPx + path.offsetYPx,
+    wPx: path.wPx,
+    hPx: path.hPx,
+    viewBox: [0, 0, path.wPx, path.hPx],
+    d: path.d,
+    fill: undefined,
+    // The path's own coordinates already carry `m`'s scale, so the stroke
+    // has to be scaled by hand to match what the browser draws.
+    stroke: { ...uniformBorder.color, a: uniformBorder.color.a * opacityMul },
+    strokeWidthPx: bw * k,
+  })
+}
+
+/** Whether ANY of the four transform properties is set — the cheap gate that
+ *  keeps every untransformed element on exactly the arithmetic it had before
+ *  individual `rotate`/`scale`/`translate` were honoured at all. */
+function hasTransform(cs: CSSStyleDeclaration): boolean {
+  const set = (v: string): boolean => !!v && v !== 'none'
+  return set(cs.transform) || set(cs.rotate) || set(cs.scale) || set(cs.translate)
+}
+
+/** The composed map and the element's own border-box size, but ONLY when the
+ *  map tilts the box off the page's axes — the one case an axis-aligned
+ *  `rect` op cannot express. Null otherwise, so the caller keeps its old
+ *  measured-rect path. */
+function tiltOf(el: Element, cs: CSSStyleDeclaration): { m: Matrix2D; size: { wPx: number; hPx: number } } | null {
+  const size = borderBoxSize(el, cs)
+  if (!(size.wPx > 0) || !(size.hPx > 0)) return null
+  const m = composedTransform(cs, size.wPx, size.hPx)
+  return isAxisAligned(m) ? null : { m, size }
+}
+
+/**
+ * The element's UNtransformed border-box size — what `getBoundingClientRect`
+ * would have reported with no transform on it. Needed because a rotated
+ * element's client rect is the bounding box of the TILTED shape (a 20.98px
+ * square at 45° measures 25.52px), so the rect alone cannot say how big the
+ * box itself is. Chromium resolves computed `width`/`height` to the border
+ * box under `box-sizing: border-box` and to the content box otherwise —
+ * verified against a real element both ways, not assumed. `auto` (an inline
+ * box, which CSS transforms do not apply to anyway) falls back to
+ * offsetWidth/offsetHeight.
+ */
+function borderBoxSize(el: Element, cs: CSSStyleDeclaration): { wPx: number; hPx: number } {
+  const declared = (v: string): number | null => {
+    const n = parseFloat(v)
+    return Number.isFinite(n) ? n : null
+  }
+  let w = declared(cs.width)
+  let h = declared(cs.height)
+  if (w === null || h === null) {
+    const he = el as HTMLElement
+    return { wPx: he.offsetWidth ?? 0, hPx: he.offsetHeight ?? 0 }
+  }
+  if (cs.boxSizing !== 'border-box') {
+    w += parsePx(cs.paddingLeft) + parsePx(cs.paddingRight) + parsePx(cs.borderLeftWidth) + parsePx(cs.borderRightWidth)
+    h += parsePx(cs.paddingTop) + parsePx(cs.paddingBottom) + parsePx(cs.borderTopWidth) + parsePx(cs.borderBottomWidth)
+  }
+  return { wPx: w, hPx: h }
 }
 
 function pseudoOps(el: HTMLElement, root: HTMLElement, ops: DrawOp[], which: '::before' | '::after'): void {
@@ -637,55 +1396,49 @@ function pseudoOps(el: HTMLElement, root: HTMLElement, ops: DrawOp[], which: '::
     const baselineY = boxOf(el, root).yPx + hostLineH - hostFontPx * 0.435
     box.yPx = baselineY - box.hPx
   }
-  // The computed transform's center shift always applies (translateY(-1px)
-  // on the grid diamond); rotation is consumed below for the diamond shape.
-  const tf = parseTransform(cs.transform)
-  box.xPx += tf.dxPx
-  box.yPx += tf.dyPx
-
+  // A pseudo's box is SYNTHESIZED, never measured, so unlike a real element's
+  // client rect it carries NONE of the transform yet: the whole map applies
+  // here. The centre shift is the map's translation column (transform-origin
+  // defaults to the centre, and nothing a linear map does moves its own
+  // origin) — for the grid diamond's `rotate(45deg) translateY(-1px)` that is
+  // the rotated (0.71, −0.71), not the authored (0, −1).
   const radii = cornerRadii(cs)
+  const m = hasTransform(cs) ? composedTransform(cs, box.wPx, box.hPx) : IDENTITY_2D
+  box.xPx += m.e
+  box.yPx += m.f
   const bg = parseColor(cs.backgroundColor)
-  if (bg && bg.a > 0 && box.wPx > 0 && box.hPx > 0) {
-    // A square pseudo rotated ~45° is a DIAMOND (Grid skills marker) — the
-    // export used to drop the rotation and print an axis-aligned square.
-    // Emitted as an svg path so no rect-op rotation plumbing is needed;
-    // the path's bounding box is the rotated square's (diagonal-sized),
-    // centered where the unrotated box was.
-    if (Math.abs(Math.abs(tf.rotationDeg) - 45) < 8 && Math.abs(box.wPx - box.hPx) < 1) {
-      const cx = box.xPx + box.wPx / 2
-      const cy = box.yPx + box.hPx / 2
-      const r = (box.wPx * Math.SQRT2) / 2
-      ops.push({
-        kind: 'svg',
-        xPx: cx - r,
-        yPx: cy - r,
-        wPx: r * 2,
-        hPx: r * 2,
-        viewBox: [0, 0, 2, 2],
-        d: 'M 1 0 L 2 1 L 1 2 L 0 1 Z',
-        fill: { ...bg, a: bg.a * opacityMul },
-        stroke: undefined,
-        strokeWidthPx: 0,
-      })
-    } else {
-      ops.push({
-        kind: 'rect',
-        xPx: box.xPx,
-        yPx: box.yPx,
-        wPx: box.wPx,
-        hPx: box.hPx,
-        fill: { ...bg, a: bg.a * opacityMul },
-        radii,
-      })
+  const fill = bg && bg.a > 0 ? { ...bg, a: bg.a * opacityMul } : null
+
+  if (!isAxisAligned(m) && box.wPx > 0 && box.hPx > 0) {
+    // Tilted: background and border both trace the real shape (a diamond for
+    // the badge heading's plain ::before, for the Grid skills marker, …).
+    const cx = box.xPx + box.wPx / 2
+    const cy = box.yPx + box.hPx / 2
+    transformedBoxOps(el, cs, cx, cy, box.wPx, box.hPx, radii, m, fill, opacityMul, ops)
+  } else {
+    // Axis-aligned: the map can still SCALE a synthesized box about its own
+    // centre, which a real element's measured rect would already carry. Left
+    // strictly untouched at scale 1 so every pseudo that has no scale keeps
+    // the exact same arithmetic — and the same last-bit rounding — as before.
+    const sx = Math.abs(m.a)
+    const sy = Math.abs(m.d)
+    if (sx !== 1 || sy !== 1) {
+      box.xPx += (box.wPx * (1 - sx)) / 2
+      box.yPx += (box.hPx * (1 - sy)) / 2
+      box.wPx *= sx
+      box.hPx *= sy
     }
+    if (fill && box.wPx > 0 && box.hPx > 0) {
+      ops.push({ kind: 'rect', xPx: box.xPx, yPx: box.yPx, wPx: box.wPx, hPx: box.hPx, fill, radii })
+    }
+    // Pseudo-elements previously got NO border handling at all (task 22) — a
+    // `::before`/`::after` with a `border` (e.g. .tpl-timeline's circular
+    // marker: `border-radius: 50%`, `border: 2px solid`) silently vanished
+    // from the export. Same box-size guard as the background rect above: a
+    // pseudo's box is SYNTHESIZED (pseudoBox), not measured, and can come out
+    // zero/negative for a degenerate host, unlike boxOps's real elements.
+    if (box.wPx > 0 && box.hPx > 0) borderOps(el, cs, box, radii, opacityMul, ops)
   }
-  // Pseudo-elements previously got NO border handling at all (task 22) — a
-  // `::before`/`::after` with a `border` (e.g. .tpl-timeline's circular
-  // marker: `border-radius: 50%`, `border: 2px solid`) silently vanished
-  // from the export. Same box-size guard as the background rect above: a
-  // pseudo's box is SYNTHESIZED (pseudoBox), not measured, and can come out
-  // zero/negative for a degenerate host, unlike boxOps's real elements.
-  if (box.wPx > 0 && box.hPx > 0) borderOps(el, cs, box, radii, opacityMul, ops)
 
   const text = pseudoContentText(cs.content)
   if (!text) return
@@ -697,29 +1450,70 @@ function pseudoOps(el: HTMLElement, root: HTMLElement, ops: DrawOp[], which: '::
     })
 }
 
-/** Bullet glyph implied by `list-style-type`, for marker kinds that are
- *  genuinely TEXT — a custom marker declared as a CSS string (our
- *  dash/arrow/check/diamond bullet styles: `list-style-type: '›  '`) reuses
- *  the same quoted-string parsing as ::before/::after content. disc/circle/
- *  square are handled separately in markerOps: browsers draw those as UA
- *  geometric shapes, not as glyphs from the current font. */
+/** Bullet glyph implied by `list-style-type`: every one of our seven bullet
+ *  styles is declared as a CSS STRING (`list-style-type: "›  "` —
+ *  Artboard.tsx's BULLET_TYPE), so unwrapping it reuses the same quoted-string
+ *  parsing as ::before/::after content. A `list-style-type` KEYWORD
+ *  (disc/circle/square/decimal/…) unwraps to '' and paints nothing — see
+ *  markerOps. */
 function listStyleGlyph(listStyleType: string): string {
   return pseudoContentText(listStyleType)
+}
+
+/**
+ * Where the browser puts an `outside` marker's text origin, in the same
+ * root-relative px the rest of the draw list is in.
+ *
+ * `list-style-position: outside` puts the marker in its own box OUTSIDE the
+ * li's principal box, RIGHT-ALIGNED against the li's CONTENT-box left edge —
+ * so the marker string's pen starts exactly one string width left of that
+ * edge, and nothing else is added. The gap between the mark and the first
+ * word is not layout: it is the marker string's own two TRAILING SPACES
+ * (Artboard.tsx's BULLET_TYPE), so `measuredWidthPx` has to be measured WITH
+ * them — which is why `markerWidthPx` below measures under `white-space: pre`
+ * (text.ts) rather than letting normal white-space processing eat them.
+ *
+ * This used to add another `0.35em` on top, from the days when a marker had
+ * no string to supply its own gap. Measured on the /print page against the
+ * exported file, that put every mark 0.34-0.43 em left of where the canvas
+ * draws it - about 3 pt at body size, on both marquee and harvard and on all
+ * seven bullet styles - far enough that marquee's disc hung outside the body
+ * margin in the file while the canvas kept it inside.
+ *
+ * Exported so the arithmetic can be pinned without a DOM (markerOps itself
+ * needs real getComputedStyle/::marker access).
+ */
+export function markerOriginX(box: Box, cs: CSSStyleDeclaration, measuredWidthPx: number): number {
+  return contentBoxOf(box, cs).xPx - measuredWidthPx
+}
+
+/**
+ * The marker string's width, measured the way the browser lays it out.
+ *
+ * A canvas context carries only a font shorthand, so it misses `font-variant`
+ * — and Chromium's UA stylesheet puts `font-variant-numeric: tabular-nums` on
+ * every `::marker`, so an ordered list's numbers line up. In Work Sans `tnum`
+ * re-cuts the SPACE, and a "•  " marker measures 1.1124 em without it against
+ * 1.0350 em with it: 0.077 em of the marker box, enough to put every marquee
+ * bullet visibly left of the one on the page. The layout probe (text.ts)
+ * reproduces the marker's own typography; the canvas measurement stays as the
+ * fallback for a document with no usable DOM behind it.
+ */
+function markerWidthPx(text: string, markerCs: CSSStyleDeclaration, cssFont: string): number {
+  return measureLaidOutWidthPx(text, markerCs) || measureTextWidthPx(text, cssFont)
 }
 
 /**
  * Native `<li>::marker` bullets (used by every template's achievement/detail
  * lists). `getComputedStyle(el, '::marker').content` is only ever something
  * other than `normal` when a stylesheet explicitly sets `::marker { content:
- * ... }` — ours never do; the bullet is driven by `list-style-type` instead
- * (disc/circle/square, or a quoted custom string for the dash/arrow/check/
- * diamond bullet styles).
+ * ... }` — ours never do; the bullet is driven by `list-style-type` instead,
+ * which every one of our seven bullet styles sets to a quoted STRING.
  *
- * `list-style-position: outside` renders the marker OUTSIDE (to the left of)
- * the li's own box, in space reserved by the list's `padding-left` — there's
- * no DOM box for the marker itself to read a position from, so we right-
- * align it against the li's left edge with a small gap, which is what
- * "outside" looks like in every browser.
+ * The mark is REAL content, not decoration: it is drawn once, visibly, as
+ * text, and it is the only thing telling a reader where one item ends and the
+ * next begins. (A marker painted as a vector outline used to be
+ * `isDecorative`, with an invisible twin beside it carrying the text.)
  */
 function markerOps(el: HTMLElement, root: HTMLElement, ops: DrawOp[]): void {
   const cs = getComputedStyle(el)
@@ -736,45 +1530,28 @@ function markerOps(el: HTMLElement, root: HTMLElement, ops: DrawOp[]): void {
   if (sizePx <= 0) return
   const font = `${markerCs.fontStyle} ${markerCs.fontWeight} ${markerCs.fontSize} ${markerCs.fontFamily}`
 
-  // Chromium draws disc/circle/square markers as small UA-generated shapes,
-  // not as glyphs from the current font — drawing the Unicode bullet/square
-  // characters instead looked visibly wrong (a tiny, font-dependent, baseline-
-  // hugging mark instead of a round dot centred on the line). Reuse the
-  // rounded-rect vector primitive defect 1 added to paint.ts: a square rect
-  // with radiusPx = its own size collapses to a perfect circle.
-  //
-  // GEOMETRY (2026-08-17 user report "points not aligned", calibrated
-  // against pixel measurement of Chromium's own rendering): the dot centers
-  // on the FIRST LINE BOX (computed line-height / 2 below the li top —
-  // measured 8.80px vs Chromium's true 8.51px on the harvard/Source Serif 4
-  // case, sub-half-pixel), and its diameter is ceil(fontSize / 3) (5px,
-  // exact match). The previous font-bounding-box arithmetic placed the dot
-  // 2px low and 0.5px small (measured 10.52px/4.5px) — and canvas font
-  // metrics additionally RACE font loading (first measurement caches
-  // fallback-font numbers), which line-height arithmetic is immune to.
-  if (!explicitText && (kind === 'disc' || kind === 'circle' || kind === 'square')) {
-    const d = Math.ceil(sizePx / 3)
-    const gapPx = sizePx * 0.4
-    const lineHeightPx = parsePx(cs.lineHeight) || layoutMetricsFor(font).heightPx || sizePx * 1.2
-    const centerYPx = box.yPx + lineHeightPx / 2
-    ops.push({
-      kind: 'rect',
-      xPx: box.xPx - gapPx - d,
-      yPx: centerYPx - d / 2,
-      wPx: d,
-      hPx: d,
-      fill: color,
-      radiusPx: kind === 'square' ? 0 : d,
-    })
-    return
-  }
-
+  // Every bullet style reaches here as a STRING marker. Chromium still draws
+  // disc/circle/square as UA shapes if a stylesheet asks for those keywords,
+  // and this deliberately does not reproduce them any more: a shape carries no
+  // text, and a marker the file can only show by hiding text under it is the
+  // thing this whole path exists to stop being. Ours ask for characters
+  // instead (Artboard.tsx), so the branch below is the only one there is.
+  // The drawn string and the extracted string are one string — the mark a
+  // reader sees is the mark an extractor reads.
   const text = explicitText || listStyleGlyph(kind)
   if (!text) return
   const run = styledTextRun(markerCs, text, 0, box.yPx)
   if (!run) return
-  const gapPx = run.sizePx * 0.35
-  run.xPx = box.xPx - gapPx - measureTextWidthPx(text, font)
+  const widthPx = markerWidthPx(text, markerCs, font)
+  run.xPx = markerOriginX(box, cs, widthPx)
+  // A REAL measured width, unlike every other synthesized run's (see
+  // types.ts's TextRun.widthPx): the marker box is one laid-out string, and
+  // handing paint.ts the browser's own width for it lets the same Tz fit that
+  // every DOM run gets absorb the difference between the embedded face's
+  // advances and the ones the features on the page produced — so the word
+  // after the mark starts exactly where the canvas starts it.
+  run.widthPx = widthPx
+  run.isDecorative = false
   ops.push({ kind: 'text', run })
 }
 
@@ -823,6 +1600,22 @@ export function svgShapeToPathD(tag: string, attr: (name: string) => string | nu
       // shape as roundedRectPath's stadium collapse in paint.ts, just via
       // SVG arc commands instead of a radius clamp.
       return `M ${cx - r} ${cy} A ${r} ${r} 0 1 0 ${cx + r} ${cy} A ${r} ${r} 0 1 0 ${cx - r} ${cy} Z`
+    }
+    case 'ellipse': {
+      // Same two-arc trace as `circle`, with the two radii kept apart. The
+      // library's drawn portraits build every head out of one of these
+      // (avatar.ts), and an unconverted ellipse used to leave the face with
+      // no head under the hair and eyes in every exported example résumé.
+      // SVG 2's `auto` (one radius standing in for the other) is honoured
+      // because a missing attribute is what `auto` means.
+      const cx = num('cx'),
+        cy = num('cy')
+      const rxAttr = attr('rx'),
+        ryAttr = attr('ry')
+      const rx = rxAttr !== null ? num('rx') : num('ry')
+      const ry = ryAttr !== null ? num('ry') : num('rx')
+      if (rx <= 0 || ry <= 0) return null
+      return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`
     }
     case 'rect': {
       const x = num('x'),
@@ -958,7 +1751,7 @@ export function expandArcFlags(d: string): string {
   return out
 }
 
-const SVG_SHAPE_TAGS = new Set(['path', 'line', 'polyline', 'polygon', 'circle', 'rect'])
+const SVG_SHAPE_TAGS = new Set(['path', 'line', 'polyline', 'polygon', 'circle', 'ellipse', 'rect'])
 // Purely structural SVG wrappers our own icon sets never emit shapes inside
 // of directly but that legitimately appear (querySelectorAll('*') walks
 // through them) without themselves being a shape to warn about.
@@ -1154,8 +1947,12 @@ export function buildDrawList(root: HTMLElement, opts?: { clickableLinks?: boole
       // - was extracted in front of the job title, so an ATS read the position
       // as "T Data Analyst" rather than "Data Analyst".
       const decorative = isAriaHidden((n as Text).parentElement, root)
+      // The ROW this text was laid out in, so paint.ts can tell two pieces of
+      // one visual line from two pieces that merely sit at the same height in
+      // different columns. See `lineBoxId`.
+      const box = lineBoxId((n as Text).parentElement, root)
       for (const run of extractRuns(n as Text, root)) {
-        const r = decorative ? { ...run, isDecorative: true } : run
+        const r = decorative ? { ...run, isDecorative: true, lineBoxId: box } : { ...run, lineBoxId: box }
         ops.push({ kind: 'text', run: r, role: r.isDecorative ? 'Artifact' : role, column, blockId })
       }
     }
@@ -1482,6 +2279,63 @@ function logicalBlockId(from: Element | null, root: Element): number | undefined
     el = el.parentElement
   }
   return undefined
+}
+
+/**
+ * A stable id for the LINE BOX a text node sits in — the row the browser laid
+ * it out in, which is not the same thing as the block it belongs to.
+ *
+ * Start at the nearest block-level ancestor (inline ancestors are transparent,
+ * exactly as in `logicalBlockId`), then climb ONE more level when that
+ * ancestor is a flex or grid ITEM: a flex item does not own the row it sits
+ * on, its container does. Measured against the real DOM — an entry's title is
+ * `div.rm-item-title[block]` and its date `div.rm-item-date[block]`, both flex
+ * items of `div.rm-item-head[flex]`; a contact is `span.rm-contact[flex]`, a
+ * flex item of `div.rm-contacts[flex]`. Those are precisely the two rows that
+ * have to come out as one line.
+ *
+ * The climb is CLAMPED inside the run's own column: the id must be a strict
+ * descendant of `.rm-col-main`/`.rm-col-aside` (or of the artboard root in a
+ * layout with neither). Without that clamp a text node parented directly by a
+ * column could climb to the flex row that holds BOTH columns, and a sidebar
+ * term level with a main-column bullet would share a line box - which is the
+ * one thing paint.ts's bridging must never be allowed to merge.
+ */
+const lineBoxIds = new WeakMap<Element, number>()
+let nextLineBoxId = 1
+function lineBoxId(from: Element | null, root: Element): number | undefined {
+  if (!from) return undefined
+  const column = from.closest('.rm-col-main, .rm-col-aside') ?? root
+  let el: Element | null = from
+  while (el && el !== column && el !== root.parentElement) {
+    const display = getComputedStyle(el).display
+    if (display !== 'inline' && display !== 'contents') break
+    el = el.parentElement
+  }
+  if (!el || el === column || el === root.parentElement) return undefined
+  // Climb while the box is an item of a ROW — a flex container laid out
+  // across, or any grid. `.rm-contact` is a flex item of `.rm-contacts` and is
+  // itself a flex container the link inside it is an item of, so one step is
+  // not enough; four is past anything the templates nest.
+  for (let depth = 0; depth < 4; depth++) {
+    const parent: Element | null = el.parentElement
+    if (!parent || parent === column || !column.contains(parent)) break
+    const pcs = getComputedStyle(parent)
+    const row =
+      ((pcs.display === 'flex' || pcs.display === 'inline-flex') && !pcs.flexDirection.startsWith('column')) ||
+      pcs.display === 'grid' ||
+      pcs.display === 'inline-grid'
+    // A flex COLUMN stacks its items, so each of them is its own row - which
+    // is what `.rm-bullets` is, and why one bullet is never joined to the next.
+    if (!row) break
+    el = parent
+  }
+  let id = lineBoxIds.get(el)
+  if (id === undefined) {
+    id = nextLineBoxId++
+    lineBoxIds.set(el, id)
+  }
+  return id
 }
 
 const TITLE_ROW_CLASSES = ['rm-section-title', 'rm-item-head', 'rm-level', 'rm-skill-group-name', 'rm-mini-title']

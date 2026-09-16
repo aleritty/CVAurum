@@ -20,8 +20,6 @@ import {
   PDFArray,
   PDFString,
   rgb,
-  setTextRenderingMode,
-  TextRenderingMode,
   type PDFFont,
   type PDFImage,
   type PDFPage,
@@ -300,6 +298,22 @@ type Transcoded = { bytes: Uint8Array; jpeg: boolean }
 /** How much of a source is kept when it is drawn into `box` under
  *  `object-fit: cover`: the largest centred rectangle of the source that has
  *  the box's own shape, which is exactly what the canvas shows. */
+/**
+ * The ink a text run is filled with.
+ *
+ * Pure white is written one level off pure (254 of 255). ATS checkers count
+ * every text show filled #FFFFFF as "white-on-white text" and report it as
+ * hidden - they walk the operators and cannot see the dark band such text
+ * sits on. Measured with that very rule over 102 exports: 12 tripped it, and
+ * every one was light text on a coloured strip or sidebar. Nothing a reader
+ * can see changes; the difference is one level in 255, and the text stays
+ * exactly as visible and as extractable as it was.
+ */
+export function textInk(c: { r: number; g: number; b: number }): ReturnType<typeof rgb> {
+  const pure = c.r >= 0.998 && c.g >= 0.998 && c.b >= 0.998
+  return pure ? rgb(254 / 255, 254 / 255, 254 / 255) : rgb(c.r, c.g, c.b)
+}
+
 export function coverCrop(
   srcW: number,
   srcH: number,
@@ -311,6 +325,105 @@ export function coverCrop(
   const sw = wide ? srcH * (boxW / boxH) : srcW
   const sh = wide ? srcH : srcW * (boxH / boxW)
   return { sx: (srcW - sw) / 2, sy: (srcH - sh) / 2, sw, sh }
+}
+
+/** A raster's size AS A READER WOULD SHOW IT, read straight off the bytes.
+ *
+ *  Needed because the shape of the source decides whether its original bytes
+ *  can go into the file untouched (see `embedImage`), and asking the browser
+ *  to decode every image just to learn its width would put a decode on the
+ *  fast path for every photo and logo in the document. PNG carries width and
+ *  height in the IHDR chunk, which is always first; JPEG carries them in its
+ *  frame header, and the EXIF `Orientation` tag can say the stored pixels are
+ *  turned - a phone photo is stored landscape and tagged "turn it", and every
+ *  browser (and this function) reports the TURNED size, while pdf-lib embeds
+ *  the stored one. Measured against sharp on nine real files, progressive
+ *  (SOF2) and CMYK (4-component) JPEGs included: all nine agree.
+ *
+ *  Returns null for anything that is not a PNG or a JPEG, or a JPEG with no
+ *  frame header - callers then fall back to decoding. */
+export function rasterSize(b: Uint8Array): { w: number; h: number; orientation: number } | null {
+  if (b.length > 24 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) {
+    const rd = (o: number) => ((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0
+    const w = rd(16)
+    const h = rd(20)
+    return w && h ? { w, h, orientation: 1 } : null
+  }
+  if (!(b.length > 4 && b[0] === 0xff && b[1] === 0xd8)) return null
+  let i = 2
+  let orientation = 1
+  let w = 0
+  let h = 0
+  while (i + 3 < b.length) {
+    if (b[i] !== 0xff) {
+      i++
+      continue
+    }
+    const m = b[i + 1]
+    // Standalone markers carry no length word.
+    if (m === 0xd8 || m === 0x01 || m === 0xff || (m >= 0xd0 && m <= 0xd7)) {
+      i += 2
+      continue
+    }
+    if (m === 0xda || m === 0xd9) break // start of scan / end: past every header
+    const len = (b[i + 2] << 8) | b[i + 3]
+    if (len < 2) break
+    const seg = i + 4
+    // SOF0..SOF15 are frame headers except C4 (Huffman tables), C8 (JPEG
+    // extensions) and CC (arithmetic tables), which share the number space.
+    if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc && !w) {
+      h = (b[seg + 1] << 8) | b[seg + 2]
+      w = (b[seg + 3] << 8) | b[seg + 4]
+    }
+    if (m === 0xe1 && b[seg] === 0x45 && b[seg + 1] === 0x78 && b[seg + 2] === 0x69 && b[seg + 3] === 0x66) {
+      const t = seg + 6 // TIFF header: "Exif\0\0" then II/MM
+      const le = b[t] === 0x49
+      const u16 = (o: number) => (le ? b[o] | (b[o + 1] << 8) : (b[o] << 8) | b[o + 1])
+      const u32 = (o: number) =>
+        le
+          ? ((b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0)
+          : (((b[o] << 24) | (b[o + 1] << 16) | (b[o + 2] << 8) | b[o + 3]) >>> 0)
+      const ifd = t + u32(t + 4)
+      if (ifd + 2 < b.length) {
+        const n = u16(ifd)
+        for (let k = 0; k < n && ifd + 2 + k * 12 + 12 <= b.length; k++) {
+          const e = ifd + 2 + k * 12
+          if (u16(e) === 0x0112) orientation = u16(e + 8)
+        }
+      }
+    }
+    i += 2 + len
+  }
+  if (!w || !h) return null
+  // 5..8 are the quarter-turn orientations, which swap the sides.
+  return orientation >= 5 && orientation <= 8 ? { w: h, h: w, orientation } : { w, h, orientation }
+}
+
+/** True when this source cannot go into the file as it stands, because the box
+ *  it is drawn into would show a DIFFERENT picture from the one the page
+ *  shows.
+ *
+ *  `page.drawImage` fills the box with the whole source: it has no `object-fit`
+ *  and no idea about EXIF. So original bytes are only right when the source
+ *  already has the box's shape (nothing to crop or letterbox) and is stored the
+ *  way up it is shown. Measured, on a document whose photo came in through the
+ *  JSON import rather than the cropper: a 600x400 photo in a square frame
+ *  exported as a squashed oval where the page showed a circle, and a phone
+ *  photo tagged orientation 6 exported lying on its side. The cropper's own
+ *  output is square and untagged, which is why the upload path never showed
+ *  this and the import path always did. */
+export function needsReshape(
+  src: { w: number; h: number; orientation: number },
+  box: { wPx: number; hPx: number; fit?: 'cover' | 'contain' }
+): boolean {
+  if (src.orientation > 1) return true
+  // No object-fit: the DOM stretches the source into the box, and so does
+  // drawImage - the two agree whatever the shapes are.
+  if (box.fit !== 'cover' && box.fit !== 'contain') return false
+  if (!src.w || !src.h || !box.wPx || !box.hPx) return false
+  // 1% of aspect is well under a pixel on a 29px logo; it keeps a source that
+  // is square bar a rounding error on the cheap path.
+  return Math.abs(src.w / src.h - box.wPx / box.hPx) > 0.01 * (box.wPx / box.hPx)
 }
 
 /** Twice the drawn size is enough resolution for print without paying for
@@ -380,8 +493,36 @@ async function transcodeBytes(
     }
     const drawW = Math.max(1, Math.round(box.wPx * SUPERSAMPLE))
     const drawH = Math.max(1, Math.round(box.hPx * SUPERSAMPLE))
-    if (!opaque || box.fit === 'contain' || !drawW || !drawH) {
-      const bytes = dataUriToBytes(natural.toDataURL('image/png'))
+    // A JPEG cannot carry the see-through part of a mark, nor the see-through
+    // letterbox a `contain` fit leaves around one, so those keep the PNG path.
+    if (!opaque || box.fit === 'contain') {
+      // A source that already has the box's shape is written at its own size,
+      // exactly as it always was: nothing to crop or letterbox, and paying a
+      // resample for that would only cost the mark its edges.
+      if (!needsReshape({ w, h, orientation: 1 }, box)) {
+        const bytes = dataUriToBytes(natural.toDataURL('image/png'))
+        return bytes ? { bytes, jpeg: false } : null
+      }
+      const shaped = document.createElement('canvas')
+      shaped.width = drawW
+      shaped.height = drawH
+      const sctx = shaped.getContext('2d')
+      if (!sctx) return null
+      // Nothing is painted behind: a canvas is born transparent, and the
+      // letterbox a `contain` fit leaves has to STAY see-through - whatever
+      // shows through it is the element's own background, which the page has
+      // already painted underneath.
+      sctx.imageSmoothingQuality = 'high'
+      if (box.fit === 'contain') {
+        // The whole image, centred, nothing cut off - what the element's own
+        // background shows around is the page's, not ours to invent.
+        const s = Math.min(drawW / w, drawH / h)
+        sctx.drawImage(img, (drawW - w * s) / 2, (drawH - h * s) / 2, w * s, h * s)
+      } else {
+        const { sx, sy, sw, sh } = coverCrop(w, h, box.wPx, box.hPx)
+        sctx.drawImage(img, sx, sy, sw, sh, 0, 0, drawW, drawH)
+      }
+      const bytes = dataUriToBytes(shaped.toDataURL('image/png'))
       return bytes ? { bytes, jpeg: false } : null
     }
     const canvas = document.createElement('canvas')
@@ -404,11 +545,15 @@ async function transcodeBytes(
   }
 }
 
-/** Fetches the op's source, embeds its ORIGINAL bytes (no re-encode/resize),
- *  once per source and drawn size; non-PNG/JPEG formats the browser can
- *  decode are re-encoded (see transcodeBytes) instead of silently skipped.
- *  The drawn size is part of the key because a re-encoded source is written
- *  at the size it is drawn - the same picture in two boxes is two pictures. */
+/** Fetches the op's source and embeds its ORIGINAL bytes (no re-encode/resize)
+ *  once per source and drawn size - measured: every photo and logo the cropper
+ *  writes goes into the file byte for byte. Two kinds of source do NOT: a
+ *  format pdf-lib cannot read (webp/gif/avif), and one whose shape or stored
+ *  rotation would make the box show a different picture from the page (see
+ *  `needsReshape`). Both are re-encoded by `transcodeBytes` rather than
+ *  silently skipped or silently wrong. The drawn size is part of the key
+ *  because a re-encoded source is written at the size it is drawn - the same
+ *  picture in two boxes is two pictures. */
 async function embedImage(
   page: PDFPage,
   op: { src: string; wPx: number; hPx: number; fit?: 'cover' | 'contain' },
@@ -429,8 +574,17 @@ async function embedImage(
           if (!res.ok) return null
           bytes = new Uint8Array(await res.arrayBuffer())
         }
-        if (hasMagic(bytes, PNG_MAGIC)) return await page.doc.embedPng(bytes)
-        if (hasMagic(bytes, JPEG_MAGIC)) return await page.doc.embedJpg(bytes)
+        // Original bytes, but only when they land in the box as the picture
+        // the page shows. pdf-lib fills the box with the whole source and
+        // knows nothing of object-fit or EXIF, so a source whose shape or
+        // stored rotation disagrees with the box is redrawn instead - see
+        // `needsReshape`, and the import-path photos it was measured on.
+        const size = rasterSize(bytes)
+        const reshape = !!size && needsReshape(size, op)
+        if (!reshape) {
+          if (hasMagic(bytes, PNG_MAGIC)) return await page.doc.embedPng(bytes)
+          if (hasMagic(bytes, JPEG_MAGIC)) return await page.doc.embedJpg(bytes)
+        }
         const transcoded = await transcodeBytes(src, op)
         if (transcoded)
           return transcoded.jpeg ? await page.doc.embedJpg(transcoded.bytes) : await page.doc.embedPng(transcoded.bytes)
@@ -454,10 +608,11 @@ async function embedImage(
  *    an ATS reads (task-10b brief, defect B — a logo's monogram letter was
  *    showing up mid-sentence in real résumé content, e.g. "EXPERIENCE V
  *    Senior Software Engineer").
- *  - Tracked (letter-spaced) REAL headings (defect A, see
- *    `paintTrackedHeading` below): this is the VISIBLE half of a two-layer
- *    approach, painted alongside a separate invisible, correctly-extractable
- *    copy of the same text.
+ *
+ * ONLY decorative runs take this path. Tracked (letter-spaced) and small-caps
+ * REAL content used to be drawn here too, as the visible half of a two-layer
+ * trick whose other half was an invisible text copy; it is ordinary visible
+ * text in a tracked cut of the font now (see `paintTrackedRun`).
  *
  * fontkit (already registered on the document for real-text font embedding)
  * exposes each glyph's outline (`glyph.path`) in FONT units with a y-UP axis
@@ -468,10 +623,9 @@ async function embedImage(
  * `operations.js`), so `glyphPathToDrawPath` only needs to negate y (and
  * scale) — never flip x — before handing coordinates to drawSvgPath.
  *
- * `xPt` defaults to the run's own (unadjusted) position, used for decorative
- * calls. `paintTrackedHeading` passes the SAME (possibly same-line-adjusted)
- * x its invisible extractable layer used, so both layers stay aligned — see
- * `paintOps`'s adjacency handling.
+ * `xPt` defaults to the run's own (unadjusted) position, which is what every
+ * decorative call wants: a mark synthesized by walk.ts is positioned against
+ * the element it belongs to, not against the previous run's drawn end.
  *
  * Returns the run's total drawn advance width in CSS px (the same `cursor`
  * accumulation already needed to position every glyph, just handed back
@@ -498,10 +652,18 @@ async function paintGlyphOutlines(
   // `font-variant: small-caps` splits the run into full-size and reduced-size
   // pieces (see smallcaps.ts); everything else is one piece at the run's own
   // size, which is the identical code path with a single segment.
+  // This path draws OUTLINES, never text, so a small-caps piece can simply be
+  // uppercased here: there is no text layer for the case to leak into (a
+  // decorative run is a logo monogram or a CSS separator glyph). Real content
+  // takes paintTrackedRun, which draws the source's own lowercase letters in a
+  // small-caps cut of the face instead — see smallcaps.ts.
   const scScale = run.smallCapsScale ?? 0
   const pieces =
     scScale > 0
-      ? smallCapsSegments(run.text).map((seg) => ({ text: seg.text, sizePt: seg.reduced ? sizePt * scScale : sizePt }))
+      ? smallCapsSegments(run.text).map((seg) => ({
+          text: seg.reduced ? seg.text.toUpperCase() : seg.text,
+          sizePt: seg.reduced ? sizePt * scScale : sizePt,
+        }))
       : [{ text: run.text, sizePt }]
 
   let cursor = 0
@@ -552,185 +714,171 @@ export function glyphPathToDrawPath(path: FontkitPath, scale: number): string {
 }
 
 /**
- * Paints a TRACKED (letter-spaced) real-content heading as TWO layers —
- * see the task-10b report for the full investigation. In short:
- *
- * `/ActualText` (the PDF spec's own §14.6.2/§14.9.4 mechanism for telling an
- * extractor the real string behind unusual glyph positioning) is NOT read by
- * pdf.js's `getTextContent()` — confirmed by reading pdfjs-dist's worker
- * source (`beginMarkedContentProps` in evaluator.js only ever reads `MCID`
- * off the marked-content properties dict; `ActualText` is used solely by the
- * separate structure-tree/accessibility API, never by plain text extraction)
- * and by an isolated probe: a minimal PDF with a correctly-formed
- * `/Span <</ActualText (SUMMARY)>> BDC ... Tj ... EMC` still extracts as
- * "S U M M A R Y" (see the task-10b report for the exact bytes and pdf.js
- * output). pdf.js instead reconstructs words from raw GLYPH GEOMETRY: any
- * gap between consecutive glyphs bigger than `fontSize * 0.102`
- * (`TRACKING_SPACE_FACTOR` in evaluator.js) is treated as a word boundary and
- * gets an inserted space, regardless of which operator produced that gap
- * (`Tc`, a `TJ` array adjustment, and an explicit `Td` all move the pen the
- * same way from pdf.js's point of view) — our tracked headings use
- * letter-spacing well above that threshold (e.g. 0.16em), so there is no
- * "clever operator choice" that keeps the SAME visible spacing invisible to
- * this heuristic.
- *
- * The fix: stop asking one text-showing operator to be both "visually
- * tracked" and "cleanly extractable" — split those into two layers instead.
- *  1. An INVISIBLE (text rendering mode 3 — the same standard mechanism
- *     OCR tools like Tesseract use to lay searchable text under a scanned
- *     image), UNTRACKED (`Tc` stays 0) real `drawText` call. With no
- *     artificial gap between glyphs, pdf.js's geometry-based heuristic never
- *     fires, so this is exactly `run.text` when extracted — verified via
- *     `_local/gate-pdf.cjs` (TRACKED_TEXT_SPLIT count) after this change.
- *  2. The VISIBLE glyphs, drawn as vector outlines carrying the FULL tracked
- *     spacing (`paintGlyphOutlines`, reusing the exact machinery defect B's
- *     decorative marks use) — pixel-identical to the browser's
- *     `letter-spacing`, but not a PDF text-showing operator at all, so it
- *     cannot be misread by ANY glyph-geometry heuristic.
- *
- * Both layers still originate from exactly ONE logical `TextRun` and the
- * extractable layer is exactly ONE `drawText` call — this does not draw
- * real content character-by-character, and the extractable text is never
- * dropped, only its rendering mode changes.
- *
- * `font` and `xPt` are supplied by `paintOps` (already embedded the font to
- * compute same-line adjacency — see there) rather than re-resolved here, so
- * both this call's invisible layer and its visible vector layer (via
- * `paintGlyphOutlines`) use the exact same x as every other real-content run
- * on the page.
- *
- * Selection geometry (task 16): a viewer builds a text item's SELECTION BOX
- * from its advertised advance width, not from any glyph actually painted —
- * so the invisible layer (drawn UNTRACKED, `Tc` stays 0, on purpose, per the
- * heuristic above) advertises a narrower advance than the visible tracked
- * outlines actually span, and the selection highlight stops short of every
- * tracked heading's last couple of letters. The fix stretches the INVISIBLE
- * layer horizontally with `Tz` (text horizontal scaling) so its advance
- * equals the VISIBLE tracked width, while its glyph SPACING stays untracked
- * (`Tz` scales a glyph's advance and its rendered width together, uniformly
- * — unlike `Tc`, it never inserts an artificial gap BETWEEN glyphs, so
- * pdf.js's gap-based tracked-split heuristic still never fires; Task 12
- * already ships `Tz` on every normal run with exact 70/70 extraction, so
- * this is the same mechanism, just applied on the tracked path too).
- *
- * The visible width is measured by actually calling `paintGlyphOutlines`
- * (this function's own Layer 2, drawn FIRST here so its return value is
- * available before Layer 1 needs it — text rendering mode 3 means Layer 1
- * paints nothing either way, so swapping draw order has no visual or
- * extraction-order effect) rather than re-deriving a second copy of its
- * glyph-advance-plus-letter-spacing accumulation: reusing the actual drawn
- * value guarantees the invisible layer's stretched advance can never drift
- * from the real ink, even by the small embedded-font-vs-Chromium metric
- * differences Task 12 documents elsewhere. `run.widthPx` (the DOM
- * client-rect width) was the other option the task brief raised, but it was
- * NOT used: Chromium's own trailing-letter-spacing behavior at the end of a
- * run is not guaranteed to match `paintGlyphOutlines`' own accumulation
- * (which adds one letter-spacing increment per glyph, including the last),
- * so it risks a small but real mismatch between the advertised (DOM-based)
- * and actual (vector-outline) advances — reusing the outline painter's own
- * number instead makes the two layers self-consistent by construction.
- *
- * Returns the `Tz` percentage actually used (100 when unscaled or inside the
- * noise dead-band — see below), clamped to [50, 400]. NOT [100, 400]: that
- * was the original (task-16) bound on the assumption a tracked heading's
- * visible width is never shorter than its untracked one, which is false —
- * 17 rules across templates.css apply NEGATIVE letter-spacing to `.rm-name`
- * (base -0.01em on every template, several override to -0.02em), and those
- * runs go through this same function. Genuine negative tracking shrinks the
- * visible width below the untracked metric (empirically ~95-99% of it), and
- * flooring Tz at 100 for that case leaves the invisible layer WIDER than the
- * visible (negatively-tracked) ink, overshooting the selection box past the
- * run's true right edge — the same class of bug task 16 fixed for positive
- * tracking, just unnoticed here since it doesn't regress anything task 16
- * itself touched. 50 is a symmetric sanity floor (never scaled to half-width
- * by tracking alone); 400 stays the upper bound (far beyond any real
- * positive letter-spacing).
- *
- * Ratios within +-1 percentage point of 100 snap to exactly 100 (no Tz
- * emitted at all) instead of the raw ratio: fontkit's own glyph-advance sum
- * (what `visibleWidthPt` above is built from) and pdf-lib's
- * `widthOfTextAtSize` (`untrackedWidthPt`) are not bit-identical for the
- * SAME text/font/size even at zero letter-spacing — a small, real,
- * tracking-unrelated metric difference (discovered testing the original
- * clamp) that would otherwise emit a spurious near-100 Tz on every tracked
- * run. Genuine negative tracking lands well outside this band (~95-99%,
- * confirmed against `.rm-name`'s real -0.01em/-0.02em), so the dead-band
- * only absorbs noise, never real tracking.
- *
- * `paintOps` folds the returned percentage back into its own shared
- * `tzPct`-based `prevRealEnd` bookkeeping (the same formula the non-tracked
- * branch uses), so the next run's same-line snap targets this (possibly
- * clamped or dead-banded) extractable advance, not the plain untracked one.
+ * One piece of a TRACKED or SMALL-CAPS run: its text, the size it is drawn
+ * at, the (possibly tracked) cut of the font that draws it, and that font's
+ * own measured width for it.
  */
-async function paintTrackedHeading(
+interface TrackedPiece {
+  text: string
+  sizePt: number
+  font: PDFFont
+  widthPt: number
+}
+
+/**
+ * Splits a tracked / small-caps run into the pieces one `drawText` each can
+ * express, and embeds the font cut each one needs.
+ *
+ * `font-variant: small-caps` is synthesized by Chromium (none of the bundled
+ * faces carries a real `smcp`): each lowercase letter is drawn as its
+ * UPPERCASE glyph at a reduced size, while uncased characters keep the full
+ * size. That is two sizes on one baseline, which no single text-showing
+ * operator can say — hence one piece per size run (smallcaps.ts). A run with
+ * no small-caps treatment is the identical path with a single piece.
+ *
+ * A reduced piece keeps its own LOWERCASE TEXT and is drawn in a small-caps
+ * CUT of the face — `fonts.smallCapsFont`, whose cmap maps each lowercase
+ * letter to its capital's glyph and leaves that glyph with the lowercase
+ * letter as its only code point. The capitals are what the reader sees and
+ * "Summary" is what every extractor reads, from one visible operator with
+ * nothing hidden under it. Uppercasing the string instead (which this did
+ * first) changed what the file SAYS: marquee's skill-group label went out as
+ * LANGUAGES, which a parser reads as a section heading.
+ *
+ * A face with no cmap the variant can rewrite falls back to the ordinary cut
+ * with the text uppercased — the page's shapes, not its words. No bundled
+ * face does (159/159 carry the format 4 subtable), so this is a guard, not a
+ * path.
+ *
+ * `letter-spacing` is a LENGTH in CSS, not a multiple of the em, so the same
+ * `letterSpacingPx` applies to a reduced small-caps piece as to a full-size
+ * one — which is a different fraction of ITS em, and therefore a different
+ * font variant. Two embeds at most per (family, weight), both subset.
+ */
+async function trackedPieces(run: TextRun, fonts: PdfFontCache): Promise<TrackedPiece[]> {
+  const scScale = run.smallCapsScale ?? 0
+  const raw =
+    scScale > 0
+      ? smallCapsSegments(run.text).map((s) => ({
+          text: s.text,
+          sizePx: s.reduced ? run.sizePx * scScale : run.sizePx,
+          smallCaps: s.reduced,
+        }))
+      : [{ text: run.text, sizePx: run.sizePx, smallCaps: false }]
+  const out: TrackedPiece[] = []
+  for (const piece of raw) {
+    if (!piece.text) continue
+    const trackingEm = piece.sizePx > 0 ? run.letterSpacingPx / piece.sizePx : 0
+    // Outside any try: a real-content run whose font cannot be embedded is
+    // not a cosmetic loss, and paintOps' contract is that it propagates.
+    const caps = piece.smallCaps ? await fonts.smallCapsFont(run.family, run.weight, trackingEm) : null
+    const font = caps ?? (await fonts.embed(run.family, run.weight, trackingEm))
+    const text = piece.smallCaps && !caps ? piece.text.toUpperCase() : piece.text
+    const sizePt = pxToPt(piece.sizePx)
+    out.push({ text, sizePt, font, widthPt: safeWidthPt(font, text, sizePt, 0) })
+  }
+  return out
+}
+
+/**
+ * Paints a TRACKED (letter-spaced) or SMALL-CAPS real-content run as ORDINARY,
+ * VISIBLE text — one text-showing operator per piece, nothing hidden.
+ *
+ * What this replaces, and why. `/ActualText` (the PDF spec's own §14.6.2 way
+ * of telling an extractor the real string behind unusual glyph positioning) is
+ * not read by pdf.js's `getTextContent()` — its evaluator only ever reads
+ * `MCID` off a marked-content properties dict — and every extractor in use
+ * instead reconstructs words from glyph GEOMETRY: pdf.js splits at any gap
+ * over `fontSize * 0.102`, and PyMuPDF and poppler do the equivalent. So a
+ * heading drawn with PDF's character-spacing operator (`Tc`) at the 0.03em to
+ * 0.2em our templates use extracts as "S U M M A R Y".
+ *
+ * The old answer was two layers: visible vector glyph outlines carrying the
+ * tracking, plus an INVISIBLE (text rendering mode 3) untracked copy of the
+ * string underneath for extractors to read. It extracted correctly, and an
+ * external ATS scanner read the file and reported "text drawn invisibly" —
+ * which is precisely the shape of that trick, whatever its intent. 22 of the
+ * 93 text objects in one export were mode 3.
+ *
+ * The answer now is to make the glyphs honestly that wide: `fonts.embed`'s
+ * third argument returns a cut of the face with `letterSpacingPx / sizePx`
+ * baked into its `hmtx` advances (fonts.ts's `widenAdvances`). `Tc` stays 0,
+ * no gap is inserted BETWEEN glyphs, and the same three extractors read
+ * "SUMMARY" as one word — measured, and asserted per-design by
+ * _local/gate-hidden-text.cjs.
+ *
+ * SMALL CAPS leaves the text layer exactly as the source wrote it. The reduced
+ * pieces are drawn with their own LOWERCASE text in a small-caps cut of the
+ * face (see `trackedPieces`), so a heading the canvas shows as "Sᴜᴍᴍᴀʀʏ" is
+ * drawn as capitals and extracts as "Summary" — from one visible operator,
+ * with nothing hidden under it. Uppercasing the string instead was the first
+ * attempt, and it made the file say something the page does not: a skill-group
+ * label set in small capitals went out as LANGUAGES, which a parser reads as a
+ * section heading.
+ *
+ * `Tz` (horizontal scaling) fits the drawn width to the DOM's own measured
+ * width exactly as the untracked branch does, and for the same reason: our
+ * embedded static fonts measure a run from 0.5% (Inter) to 1.8% (Montserrat)
+ * wide of what Chromium renders, so without it the ink drifts right of its
+ * on-screen position by the end of a long heading. The DOM width already
+ * INCLUDES the tracking (Chromium adds one increment per character, the last
+ * included — the same thing `widenAdvances` does), so the numerator and the
+ * denominator are the same measurement and the ratio lands near 100. Same
+ * 90-110 sanity band as the untracked branch; negative tracking is simply a
+ * narrower variant and needs no special case.
+ *
+ * Returns the natural (pre-`Tz`) advance and the `Tz` actually used, which
+ * `paintOps` folds into the shared `prevRealEnd` bookkeeping unchanged.
+ */
+async function paintTrackedRun(
   page: PDFPage,
   run: TextRun,
-  font: PDFFont,
   fonts: PdfFontCache,
   pageHeightPt: number,
   xPt: number,
-  untrackedWidthPt: number
-): Promise<number> {
-  // Layer 2: visible, tracked, vector — not part of the text layer at all.
-  // Drawn first so its real drawn advance is known before Layer 1 needs it.
-  const visibleWidthPx = await paintGlyphOutlines(page, run, fonts, pageHeightPt, xPt)
-  const visibleWidthPt = pxToPt(visibleWidthPx)
-
+  domWidthPt: number
+): Promise<{ advanceWidthPt: number; tzPct: number }> {
+  const pieces = await trackedPieces(run, fonts)
+  const naturalPt = pieces.reduce((sum, p) => sum + p.widthPt, 0)
   let tzPct = 100
-  if (untrackedWidthPt > 0) {
-    const rawRatio = (100 * visibleWidthPt) / untrackedWidthPt
-    // +-1pp dead-band absorbs fontkit-vs-pdf-lib metric noise (see the doc
-    // comment above) as an exact no-op rather than a spurious near-100 Tz;
-    // outside it, allow SHRINKING to 50% (negative letter-spacing, e.g.
-    // .rm-name) as well as stretching, up to 400%.
-    tzPct = Math.abs(rawRatio - 100) <= 1 ? 100 : Math.min(400, Math.max(50, rawRatio))
+  if (domWidthPt > 0 && naturalPt > 0) {
+    tzPct = Math.min(110, Math.max(90, (100 * domWidthPt) / naturalPt))
   }
-
-  // Layer 1: invisible, untracked (Tc stays 0), extractable — stretched via
-  // Tz (set immediately before, reset in a finally) so its advertised
-  // advance matches the visible tracked width above. Exactly the Task 12
-  // Tz set/reset discipline; this path and the non-tracked path never run
-  // for the same op (letterSpacingPx selects one or the other in paintOps),
-  // so there is no Tz state to fight over between them.
   if (tzPct !== 100) {
     page.pushOperators(PDFOperator.of(PDFOperatorNames.SetTextHorizontalScaling, [PDFNumber.of(tzPct)]))
   }
-  page.pushOperators(setTextRenderingMode(TextRenderingMode.Invisible))
   try {
-    page.drawText(run.text, {
-      x: xPt,
-      y: flipY(pxToPt(run.baselinePx), pageHeightPt),
-      size: pxToPt(run.sizePx),
-      font,
-      color: rgb(run.color.r, run.color.g, run.color.b),
-      opacity: run.color.a,
-    })
+    const yPt = flipY(pxToPt(run.baselinePx), pageHeightPt)
+    const color = textInk(run.color)
+    let pieceXPt = xPt
+    for (const piece of pieces) {
+      page.drawText(piece.text, {
+        x: pieceXPt,
+        y: yPt,
+        size: piece.sizePt,
+        font: piece.font,
+        color,
+        opacity: run.color.a,
+      })
+      // Tz scales the advances after the text origin, not the origin itself.
+      pieceXPt += piece.widthPt * (tzPct / 100)
+    }
   } catch (e) {
     // Drawing SHAPES the run, and fontkit's Indic syllable shaper is a
     // regenerator-transpiled state machine whose runtime is not bundled: a
     // resume containing Devanagari or Telugu threw `regeneratorRuntime is not
     // defined` from inside pdf-lib and took the ENTIRE export down with it, so
-    // the author got no file at all. Reproduced on the polished and creative
-    // templates - fonts routing through the simpler shaper were unaffected,
-    // which is why it only ever showed on some.
-    //
-    // One run that cannot be shaped costs that run's extractable text, not the
-    // document. Its characters have no glyphs in this font and are dropped
-    // from the output regardless, and the export already reports exactly those
-    // characters to the author (see `lastUnsupportedCharacters`), so this is
-    // not a silent loss - it is the same loss, without the crash.
-    console.warn('[pdf] could not shape a run; its text is omitted from the extractable layer', e)
+    // the author got no file at all. One run that cannot be shaped costs that
+    // run, not the document - and its characters have no glyphs in this font
+    // and would be dropped anyway (the export reports exactly those characters
+    // to the author; see `lastUnsupportedCharacters`).
+    console.warn('[pdf] could not shape a run; it is omitted from the page', e)
   } finally {
-    // Always restore normal (filled) rendering mode and 100% horizontal
-    // scaling, even if drawText threw — otherwise every op after this one
-    // would silently paint nothing, or every run after it would stay scaled.
-    page.pushOperators(setTextRenderingMode(TextRenderingMode.Fill))
     if (tzPct !== 100) {
       page.pushOperators(PDFOperator.of(PDFOperatorNames.SetTextHorizontalScaling, [PDFNumber.of(100)]))
     }
   }
-
-  return tzPct
+  return { advanceWidthPt: naturalPt, tzPct }
 }
 
 /**
@@ -819,6 +967,122 @@ function justifiedPieces(
   return gapPt > 0 ? { texts, widthsPt, gapPt } : null
 }
 
+/** What `paintOps` remembers about the last REAL text run it drew — enough to
+ *  place the next one against it, and to bridge the gap between them. */
+interface PrevRealEnd {
+  baselinePx: number
+  endXPt: number
+  chainStartXPt: number
+  lineBoxId?: number
+  sizePx: number
+  sizePt: number
+  font: PDFFont
+  endsWithSpace: boolean
+  color: TextRun['color']
+}
+
+/**
+ * Two baselines this close, as a fraction of the SMALLER of the two type
+ * sizes, are one row. A title and its date sit half a point apart (different
+ * sizes, one shared line box) and must count as one; two stacked lines of a
+ * bullet are a whole line-height apart and must not. 0.35 sits far from both.
+ */
+const LINE_BOX_BASELINE_FRACTION = 0.35
+/** Narrower than half a space is not a gap the reader can see, and the
+ *  same-line snap above has already closed anything under a full space. */
+const BRIDGE_MIN_SPACE_FRACTION = 0.5
+/**
+ * How far one space glyph may be stretched before a second is added.
+ *
+ * `Tz` has no ceiling in the PDF spec, and the gap across an entry's title/date
+ * row wants a lot of it: measured across all 68 designs and 34 examples
+ * (_local/gate-hidden-text.cjs), the widest any of them uses is 19936%. pdf.js
+ * and PyMuPDF both read such a row back as ONE line with ONE space in it, and
+ * pdftotext reads the same words (it keeps the date on its own line either way
+ * - with one stretched space, with many ordinary ones, or with nothing at all
+ * - because its raw mode groups by physical layout, not by the text stream).
+ *
+ * So the cap is a sanity bound rather than a reader limit, set just above what
+ * a page that size can ask for. Past it the gap is filled with SEVERAL
+ * stretched spaces instead of one enormous one - which every engine treats
+ * identically, and which keeps the operand a number rather than a dare.
+ */
+const BRIDGE_MAX_TZ_PCT = 20000
+
+/**
+ * Draws ONE visible space across the empty gap between two runs the browser
+ * put on the SAME visual row.
+ *
+ * The defect, measured on a real export: between two runs with nothing at all
+ * between them — what the painter writes between contact items, and between an
+ * entry title and its date — PyMuPDF reads two separate LINES, and so do the
+ * viewers that group text the way it does, so drag-selecting a contact row
+ * jumps from item to item and an extractor emits each item on a line of its
+ * own. pdf.js hides this by inventing a space out of the geometry; the others
+ * do not. PDF's word-spacing operator (`Tw`) is not the answer: it applies
+ * only to the single-byte code 32, and our fonts embed as composite (two-byte
+ * codes), so the readers that follow that rule ignore it.
+ *
+ * A real space glyph, horizontally scaled to exactly the gap, is: it advances
+ * the pen by the same amount the void did, draws no ink, and every engine then
+ * reads one line.
+ *
+ * It is bounded by the LINE BOX (walk.ts's `lineBoxId`), never by geometry
+ * alone — so a sidebar term that happens to sit level with a main-column
+ * bullet can never be joined to it, whatever the gap. And it is never drawn
+ * where a space already exists on either side, so no run gains a doubled one.
+ *
+ * `prev` is the run drawn immediately before, so a row the painter does NOT
+ * cross in one stretch is not bridged. A grid that flows down its columns
+ * (atlas's header sets `grid-template-rows: repeat(3, auto)` and fills column
+ * by column) paints the whole left column, then the whole right one, and its
+ * visual rows stay separate lines - which is correct, and the same rule that
+ * keeps a sidebar out of the main column: the reading order there really does
+ * run down each column, and a row of it is a coincidence of layout. Bridging
+ * from the row's own last end was tried and measured: the spaces land, and no
+ * engine merges the lines anyway, because the pen had already moved on.
+ */
+function bridgeGapWithSpace(
+  page: PDFPage,
+  prev: PrevRealEnd | null,
+  run: TextRun,
+  xPt: number,
+  pageHeightPt: number
+): void {
+  if (!prev) return
+  if (run.lineBoxId === undefined || run.lineBoxId !== prev.lineBoxId) return
+  if (prev.endsWithSpace || /^\s/.test(run.text)) return
+  const baselineGapPx = Math.abs(run.baselinePx - prev.baselinePx)
+  if (baselineGapPx >= LINE_BOX_BASELINE_FRACTION * Math.min(run.sizePx, prev.sizePx)) return
+  const spaceWidthPt = safeWidthPt(prev.font, ' ', prev.sizePt, prev.sizePt * 0.25)
+  if (spaceWidthPt <= 0) return
+  const gapPt = xPt - prev.endXPt
+  if (gapPt < BRIDGE_MIN_SPACE_FRACTION * spaceWidthPt) return
+
+  const count = Math.max(1, Math.ceil((100 * gapPt) / (BRIDGE_MAX_TZ_PCT * spaceWidthPt)))
+  const tzPct = (100 * gapPt) / (count * spaceWidthPt)
+  page.pushOperators(PDFOperator.of(PDFOperatorNames.SetTextHorizontalScaling, [PDFNumber.of(tzPct)]))
+  try {
+    page.drawText(' '.repeat(count), {
+      x: prev.endXPt,
+      // The EARLIER run's baseline: the space belongs to the end of that run,
+      // and putting it on the later run's baseline would tip a title/date row
+      // half a point out of line for an engine that groups by baseline.
+      y: flipY(pxToPt(prev.baselinePx), pageHeightPt),
+      size: prev.sizePt,
+      font: prev.font,
+      color: textInk(prev.color),
+      opacity: prev.color.a,
+    })
+  } catch (e) {
+    // A space that cannot be shaped costs the bridge, not the export — the
+    // page looks identical either way, since a space draws nothing.
+    console.warn('[pdf] could not draw a bridging space', e)
+  } finally {
+    page.pushOperators(PDFOperator.of(PDFOperatorNames.SetTextHorizontalScaling, [PDFNumber.of(100)]))
+  }
+}
+
 export async function paintOps(
   page: PDFPage,
   ops: DrawOp[],
@@ -874,7 +1138,7 @@ export async function paintOps(
   // while reorder offsets (the case the lower bound exists for) stay
   // line-scale on short chains and remain excluded. The positive bound stays
   // one space width (a larger positive gap is DOM-intended spacing).
-  let prevRealEnd: { baselinePx: number; endXPt: number; chainStartXPt: number } | null = null
+  let prevRealEnd: PrevRealEnd | null = null
 
   for (const op of ops) {
     // Tagged PDF: every operator this loop emits belongs either to a
@@ -885,11 +1149,6 @@ export async function paintOps(
     const mark = tagSink?.begin(page, op)
     if (op.kind === 'text' && !op.run.isDecorative) {
       let { run } = op
-      // A wrapped keyword chip is split into VISIBLE outline pieces plus one
-      // INVISIBLE run carrying the whole phrase (see TextRun.outlineOnly).
-      // Both leave the shared same-line snap chain alone: the outlines are
-      // not text-showing operators at all, and the invisible run deliberately
-      // sits on top of the first piece rather than after it.
       // Intentionally OUTSIDE the try/catch below: any failure to embed the
       // font (real content, tracked or not) must propagate, not be
       // swallowed as a cosmetic per-op issue.
@@ -911,9 +1170,10 @@ export async function paintOps(
           if (segs.some((s) => s.font !== 0)) {
             const chainFonts = await Promise.all(chain.map((c) => fonts.embed(c.family, run.weight)))
             if (run.letterSpacingPx !== 0 || (run.smallCapsScale ?? 0) > 0) {
-              // A tracked heading is shaped as ONE run (two layers, outlines
-              // plus an invisible text layer), so it takes the first font that
-              // draws all of it; a heading is one script in practice.
+              // A tracked or small-caps run is shaped and measured piece by
+              // piece against ONE cut of one family (paintTrackedRun), so it
+              // takes the first chain font that draws all of it; a heading is
+              // one script in practice.
               const whole = fontCoveringAll(run.text, chain.map((c) => c.has))
               if (whole > 0) {
                 run = { ...run, family: chain[whole].family }
@@ -947,11 +1207,19 @@ export async function paintOps(
         }
       }
 
-      // widthOfTextAtSize never applies letter-spacing, so this is the
-      // UNTRACKED width either way — exactly what the non-tracked branch's
-      // Tz ratio needs, AND exactly the "untracked width" the tracked
-      // branch's OWN Tz ratio needs (see paintTrackedHeading's doc comment)
-      // as the denominator against the visible tracked width.
+      // ...and where the snap leaves a REAL gap on one visual row, bridge it
+      // with one real space. See `bridgeGapWithSpace`.
+      if (!snappedToChain) bridgeGapWithSpace(page, prevRealEnd, run, xPt, pageHeightPt)
+
+      // The width the BROWSER laid the run out at, which both branches fit
+      // their drawn width to with Tz. 0 means unmeasured (types.ts) — no
+      // scaling at all, in either branch.
+      const domWidthPt = run.widthPx > 0 ? pxToPt(run.widthPx) : 0
+
+      // widthOfTextAtSize never applies letter-spacing, and the plain cut of
+      // the font carries none, so this is the UNTRACKED width — what the
+      // non-tracked branch's Tz ratio needs. The tracked branch measures its
+      // own pieces against their own (tracked) cuts instead.
       const pieceWidthsPt = pieces
         ? pieces.map((p) => (p.font ? safeWidthPt(p.font, p.text, sizePt, 0) : 0))
         : null
@@ -964,19 +1232,18 @@ export async function paintOps(
       // out to the width the browser measured (see the else branch below).
       let advanceWidthPt = embeddedWidthPt
 
-      // Small-caps runs take the tracked (two-layer) path even at zero
-      // letter-spacing: their VISIBLE glyphs are uppercase at two different
-      // sizes, which no single text-showing operator can express, while the
-      // invisible layer keeps the natural-case string an ATS reads.
+      // Small-caps runs take the tracked path even at zero letter-spacing:
+      // their glyphs are uppercase at two different sizes, which no single
+      // text-showing operator can express — but every piece is ordinary
+      // VISIBLE text, drawn once (see paintTrackedRun).
       if (run.letterSpacingPx !== 0 || (run.smallCapsScale ?? 0) > 0) {
-        // Tracked headings (task 16): paintTrackedHeading stretches its OWN
-        // invisible extractable layer via Tz so its selection geometry
-        // matches the visible tracked width, and returns the ratio it used
-        // — folded into the SAME tzPct the non-tracked branch below sets, so
-        // the shared endXPt formula just past this if/else advances by the
-        // true (tracked) drawn width instead of the untracked one, with no
-        // separate bookkeeping path needed.
-        tzPct = await paintTrackedHeading(page, run, font, fonts, pageHeightPt, xPt, embeddedWidthPt)
+        const drawn = await paintTrackedRun(page, run, fonts, pageHeightPt, xPt, domWidthPt)
+        // Folded into the SAME tzPct/advanceWidthPt the non-tracked branch
+        // below sets, so the shared endXPt formula just past this if/else
+        // advances by the true (tracked) drawn width with no separate
+        // bookkeeping path.
+        tzPct = drawn.tzPct
+        advanceWidthPt = drawn.advanceWidthPt
       } else {
         // Exact-DOM-width scaling (task 12): our embedded static fonts
         // measure runs slightly (Inter, ~0.5%) to noticeably (Montserrat,
@@ -1006,7 +1273,6 @@ export async function paintOps(
         // embed as composite (two-byte codes), so a reader that follows that
         // rule - the one built into the common browser among them - ignores
         // it and draws every justified line short.
-        const domWidthPt = run.widthPx > 0 ? pxToPt(run.widthPx) : 0
         // A mixed-script run is not spread as a justified line: its pieces
         // already carry their own fonts, and the Tz scaling below fits the
         // whole to the browser's width the same way it does one font.
@@ -1025,7 +1291,7 @@ export async function paintOps(
             y: yPt,
             size: sizePt,
             font,
-            color: rgb(run.color.r, run.color.g, run.color.b),
+            color: textInk(run.color),
             opacity: run.color.a,
           }
           if (spread) {
@@ -1049,11 +1315,13 @@ export async function paintOps(
             page.drawText(run.text, { ...style, x: xPt })
           }
         } catch (e) {
-          // The visible twin of the invisible layer above, and it shapes the
-          // run the same way - so it fails the same way on a script fontkit's
-          // transpiled shaper cannot handle. Losing this run is losing text
-          // the font has no glyphs for anyway; losing the export is losing the
-          // resume. See the note on the invisible layer for the whole story.
+          // Drawing SHAPES the run, and fontkit's Indic syllable shaper is a
+          // regenerator-transpiled state machine whose runtime is not bundled:
+          // a resume containing Devanagari or Telugu threw
+          // `regeneratorRuntime is not defined` from inside pdf-lib and took
+          // the ENTIRE export down with it. Losing this run is losing text the
+          // font has no glyphs for anyway; losing the export is losing the
+          // resume.
           console.warn('[pdf] could not shape a run; it is omitted from the page', e)
         } finally {
           if (tzPct !== 100) {
@@ -1064,12 +1332,10 @@ export async function paintOps(
 
       // When scaling is active the run's TRUE drawn width is the SCALED one
       // (DOM width for the non-tracked branch; for the tracked branch, the
-      // — possibly clamped or dead-band-snapped — Tz-stretched extractable
-      // advance paintTrackedHeading actually emitted, which is not always
-      // exactly equal to the raw visible-outline width once the [50,400]
-      // clamp or the +-1pp noise dead-band engages), so bookkeeping must
-      // advance by that, not the embedded (untracked) metric, or the next
-      // run's same-line snap would target the wrong endpoint. tzPct stays
+      // tracked cut's own measured advance times the Tz paintTrackedRun
+      // actually emitted), so bookkeeping must advance by that, not the
+      // plain (untracked) metric, or the next run's same-line snap would
+      // target the wrong endpoint. tzPct stays
       // 100 whenever neither branch's scaling applied, so this reduces to
       // the old `xPt + embeddedWidthPt` there.
       // Underline and strike-through are RULED, not drawn by the font, so
@@ -1091,7 +1357,9 @@ export async function paintOps(
               start: { x: xPt, y: baseYPt + dy },
               end: { x: xPt + widthPt, y: baseYPt + dy },
               thickness,
-              color: rgb(run.color.r / 255, run.color.g / 255, run.color.b / 255),
+              // The run's own colour (0..1 like every other site here): this used
+              // to divide by 255 and drew a near-black rule under coloured text.
+              color: textInk(run.color),
               opacity: run.color.a,
             })
           }
@@ -1103,6 +1371,12 @@ export async function paintOps(
         baselinePx: run.baselinePx,
         endXPt: xPt + advanceWidthPt * (tzPct / 100),
         chainStartXPt: nextChainStartXPt,
+        lineBoxId: run.lineBoxId,
+        sizePx: run.sizePx,
+        sizePt,
+        font,
+        endsWithSpace: /\s$/.test(run.text),
+        color: run.color,
       }
       if (mark) tagSink?.end(page, mark)
       continue
@@ -1256,7 +1530,7 @@ export async function paintOps(
             // separate offset math needed.
             //
             // try/finally around the pop (matching every other push/pop pair
-            // in this file, e.g. paintTrackedHeading's Tr/Tz reset): a throw
+            // in this file, e.g. paintTrackedRun's Tz reset): a throw
             // from drawImage as a bare statement would otherwise leave the
             // clip and translate `cm` active on the graphics state with no
             // matching Q — paintOps' outer per-op catch swallows the error,
@@ -1338,8 +1612,44 @@ export async function paintOps(
             svgOpts.borderOpacity = op.stroke.a
             svgOpts.borderLineCap = LineCapStyle.Round // lucide's own strokeLinecap/strokeLinejoin: round
           }
-          if (svgOpts.color || svgOpts.borderColor) {
+          if (!svgOpts.color && !svgOpts.borderColor) break
+          // A rounded `<img>` clips its picture: a drawn portrait paints a
+          // backdrop rect over its whole viewBox, and the photo slot is a
+          // circle, so without this the file showed a square of backdrop
+          // where the page shows a disc. Same clamped bezier corner math and
+          // the same tl<->bl / tr<->br vertical-mirror swap as the raster
+          // `image` case below — see its comment for why that swap is needed
+          // in a y-up local frame.
+          const clip = op.clip
+          const clipR = clip ? radiiToPt(clip.radii) : null
+          const clipping = !!clipR && (clipR.tl > 0.5 || clipR.tr > 0.5 || clipR.br > 0.5 || clipR.bl > 0.5)
+          if (clipping && clip && clipR) {
+            const cxPt = pxToPt(clip.xPx)
+            const cyPt = flipY(pxToPt(clip.yPx + clip.hPx), pageHeightPt) // bottom-left, page space
+            page.pushOperators(
+              pushGraphicsState(),
+              concatTransformationMatrix(1, 0, 0, 1, cxPt, cyPt),
+              ...roundedRectOperators(pxToPt(clip.wPx), pxToPt(clip.hPx), {
+                tl: clipR.bl,
+                tr: clipR.br,
+                br: clipR.tr,
+                bl: clipR.tl,
+              }),
+              PDFOperator.of(PDFOperatorNames.ClipNonZero),
+              PDFOperator.of(PDFOperatorNames.EndPath)
+            )
+            // The local frame's origin is now the clip box's own bottom-left,
+            // so the path's y-down anchor moves with it.
+            svgOpts.x = pxToPt(op.xPx) - cxPt
+            svgOpts.y = flipY(pxToPt(op.yPx), pageHeightPt) - cyPt
+          }
+          try {
             page.drawSvgPath(op.d, svgOpts)
+          } finally {
+            // Balanced q/Q whatever drawSvgPath does: paintOps' per-op catch
+            // swallows a throw, and an unmatched clip would silently apply to
+            // every op painted after this one.
+            if (clipping) page.pushOperators(popGraphicsState())
           }
           break
         }
@@ -1493,6 +1803,54 @@ function cropOpToBand(op: Extract<DrawOp, { kind: 'rect' | 'line' }>, bandTopPx:
   return { ...op, yPx: topPx, hPx: Math.max(0, bottomPx - topPx) }
 }
 
+/**
+ * How far below the document's own top (y = 0, which is also `bandTops[0]`)
+ * a rect may begin and still be believed when it claims to be page chrome.
+ *
+ * Census behind the number: every template in the registry (58 of them) x
+ * three page margins x two document lengths produced 452 ops carrying
+ * walk.ts's `pageChrome` tag, and 450 of them sat at y = 0.0 EXACTLY — a
+ * ground rect is the root's own background, or a column band that starts
+ * where the artboard starts. The two exceptions were the marquee footer
+ * strip's tail, at y = 1160.6 and y = 1225.1. One pixel of slack for
+ * sub-pixel layout therefore sits three orders of magnitude clear of the
+ * nearest impostor.
+ */
+const CHROME_TOP_TOLERANCE_PX = 1
+
+/**
+ * True when a `pageChrome`-tagged op really IS the document's own ground —
+ * the thing that has earned the right to be redrawn edge-to-edge on every
+ * sheet — rather than merely a tall piece of decoration.
+ *
+ * walk.ts tags on HEIGHT alone: a background rect at least 96% of the
+ * document's content height. That says "tall", not "covers the document",
+ * and the two part company on any document only slightly longer than one
+ * page. Measured, on marquee: the strip's tail (artboard.css
+ * `.rm-footer::after` — one page's worth of the strip's colour hung below
+ * it so its ground reaches the paper's foot, sized by render.tsx) is
+ * 1122.5px tall and begins at y = 1225.1 on a 1150.6px document, i.e. BELOW
+ * the document's own bottom edge. 1122.5 >= 0.96 x 1150.6, so it was tagged;
+ * `clampChromeOpToPage` then discarded its y and painted it over the whole
+ * of BOTH sheets, and the export came back solid #111111 with the text layer
+ * intact underneath it. The window is contentHeight in (one page's budget,
+ * pageHeight / 0.96] — 1106.5 to 1169.3px on A4 — which is exactly why that
+ * document blacked out at 18-24mm margins and paginated cleanly at 26mm.
+ *
+ * This is a class, not a template: any full-bleed block about a page tall
+ * (footer strip, banner header, dark sidebar) does the same the moment the
+ * document lands in that window.
+ *
+ * Erring strict is the cheap direction. A ground rect wrongly demoted here
+ * falls through to ordinary band assignment, which still paints it in the
+ * right place on every page it spans — it merely stops at the artboard's top
+ * padding on a continuation page instead of bleeding to the sheet's edge.
+ * Erring lax loses the whole document under a rectangle.
+ */
+function isDocumentGround(op: DrawOp): boolean {
+  return op.kind === 'rect' && op.yPx <= CHROME_TOP_TOLERANCE_PX
+}
+
 /** A page-chrome op (walk.ts's `pageChrome: true` — the root's own full-
  *  height background, or a full-column band like a dark two-column sidebar)
  *  repeats on EVERY output page, resized to THAT page's own full height
@@ -1532,8 +1890,10 @@ export function clampChromeOpToPage(op: DrawOp, pageHeightPx: number, docYAtPage
  * its natural position; every later page's band is shifted up so its own
  * content starts exactly `pageTopPaddingPx` below that page's top, the same
  * visual margin page 1 already has built into its own natural layout).
- * `pageChrome` ops skip band assignment entirely and instead repeat, via
- * `clampChromeOpToPage`, on EVERY page.
+ * A `pageChrome` op that is really the document's ground (`isDocumentGround`
+ * — tagged AND starting at the document's top) skips band assignment
+ * entirely and instead repeats, via `clampChromeOpToPage`, on EVERY page;
+ * one that only carries the tag is assigned like any other op.
  *
  * Op order within each page's own list is preserved from `ops`' original
  * document order (a single left-to-right pass appends to whichever page
@@ -1578,7 +1938,9 @@ export function assignOpsToPages(
   }
 
   for (const op of ops) {
-    if (op.pageChrome) {
+    // The tag alone is not enough to earn the full-bleed repeat — the op has
+    // to start at the document's top as well. See `isDocumentGround`.
+    if (op.pageChrome && isDocumentGround(op)) {
       // Page i shows document y starting at its own band top (page 1 starts
       // at 0); that offset is what keeps a chrome gradient continuous.
       pages.forEach((pageOps, i) =>

@@ -26,10 +26,12 @@ import { useAppStore } from '@/store/useAppStore'
 import { createDocument } from '@/data/defaults'
 import { applyTemplateToMetadata } from '@/lib/templateApply'
 import { TEMPLATE_COUNT, getTemplate } from '@/templates/registry'
+import { SAMPLE_COUNT } from '@/data/library/count'
 import { SITE } from '@/data/siteCopy'
 import { PreviewThumb } from '@/components/preview/PreviewThumb'
 import { HoverZoom } from '@/components/preview/HoverZoom'
 import { Logo } from '@/components/ui/Logo'
+import { SiteMenuButton } from '@/components/site/SiteMenu'
 import { ThemeToggle } from '@/components/ui/ThemeToggle'
 import { useResumeActions, NewResumeModal, SamplePicker } from '@/components/dashboard/newResume'
 import { InstallButton } from '@/components/ui/InstallButton'
@@ -127,7 +129,10 @@ export function Landing() {
             <Link to="/templates" className={`transition ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
               Templates
             </Link>
-            <a href="#compare" className={`transition ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
+            <Link to="/examples" className={`transition ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
+              Examples
+            </Link>
+            <a href="#compare" className={`hidden transition lg:inline ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
               Compare
             </a>
             <a href="#privacy" className={`transition ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
@@ -146,9 +151,13 @@ export function Landing() {
             </a>
             <InstallButton />
             <ThemeToggle />
-            <Link className={hasResumes ? 'btn-outline btn-sm' : 'btn-ghost btn-sm'} to="/app">
-              <span className="sm:hidden">Resumes</span>
-              <span className="hidden sm:inline">My resumes{hasResumes ? ` (${library.length})` : ''}</span>
+            {/* Below sm this chip gives its room to the menu button, which
+                lists "My resumes" as a row — see SiteMenu.tsx. */}
+            <Link
+              className={`hidden sm:inline-flex ${hasResumes ? 'btn-outline btn-sm' : 'btn-ghost btn-sm'}`}
+              to="/app"
+            >
+              My resumes{hasResumes ? ` (${library.length})` : ''}
             </Link>
             <button className="btn-primary btn-sm" onClick={() => setChooser(true)}>
               <Plus className="h-4 w-4" />
@@ -156,6 +165,7 @@ export function Landing() {
                 Create<span className="hidden sm:inline"> resume</span>
               </span>
             </button>
+            <SiteMenuButton current="home" repoUrl={REPO_URL} onCreate={() => setChooser(true)} />
           </div>
         </div>
       </header>
@@ -236,7 +246,11 @@ export function Landing() {
             <div>
               <h2 className="text-xl font-semibold tracking-tight">Start from a recruiter-ready template</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Click any design to start editing — switch anytime, your content stays.
+                Click any design to start editing — switch anytime, your content stays. Not sure what to write?{' '}
+                <Link className="text-primary underline-offset-2 hover:underline" to="/examples">
+                  Read {SAMPLE_COUNT} full examples
+                </Link>
+                .
               </p>
             </div>
             <Link className="btn-ghost btn-sm hidden sm:inline-flex" to="/templates">
@@ -411,6 +425,9 @@ export function Landing() {
             <Link className="transition hover:text-foreground" to="/templates">
               Templates
             </Link>
+            <Link className="transition hover:text-foreground" to="/examples">
+              Examples
+            </Link>
             <a className="transition hover:text-foreground" href={REPO_URL} target="_blank" rel="noreferrer">
               GitHub
             </a>
@@ -445,7 +462,7 @@ export function Landing() {
           onClose={() => setSampleOpen(false)}
           onPick={(p) => {
             setSampleOpen(false)
-            create(true, p.template, p.content, p.tweaks)
+            create(true, p.template, p.content, p.tweaks, `${p.role} resume`)
           }}
         />
       )}
@@ -690,9 +707,9 @@ function HeroCinema({
             .
           </h1>
           <p className="mt-5 max-w-md text-base leading-relaxed text-white/65">
-            {TEMPLATE_COUNT} designer templates you can restyle <em className="not-italic text-white/90">section by section</em>, a
-            built-in ATS check with a parser&apos;s-eye view, PDF import with on-device OCR, exports whose links still
-            click — and not a single byte of your career story sent to any server.
+            {TEMPLATE_COUNT} designer templates you can restyle <em className="not-italic text-white/90">section by section</em>,{' '}
+            {SAMPLE_COUNT} complete examples to start from, a built-in ATS check with a parser&apos;s-eye view, PDF
+            import with on-device OCR — and not a single byte of your career story sent to any server.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <button

@@ -31,29 +31,59 @@ export interface TextRun {
    * Synthetic small-caps size ratio for this run (`font-variant: small-caps`),
    * measured off Chromium by `smallCapsScaleFor` — 0 (or absent) means the run
    * has no small-caps treatment, which is every synthesized run and every
-   * normally-cased piece of DOM text. Only the VISIBLE glyph layer honours it;
-   * the extractable text layer always keeps the source's natural case, so an
-   * ATS still reads "Summary", never "SUMMARY" (see smallcaps.ts).
+   * normally-cased piece of DOM text. It changes the SIZE the reduced pieces
+   * are drawn at, and the font CUT that draws them (fonts.ts's
+   * `smallCapsVariant`, whose cmap turns each lowercase letter into its
+   * capital's glyph while the letter itself stays lowercase). The extractable
+   * text layer keeps the source's natural case, so an ATS still reads
+   * "Summary", never "SUMMARY" (see smallcaps.ts).
    */
   smallCapsScale?: number
   /**
    * The run's laid-out width in CSS px, straight off the same client rect(s)
    * `xPx` came from — 0 when unknown/unmeasured (paint.ts's Tz horizontal-
-   * scaling never applies at 0; see task-12 brief). Only extractRuns (real
-   * DOM text.ts text) sets a real value; every TextRun synthesized elsewhere
-   * (walk.ts's pseudo/marker/logo content) sets 0 rather than guess.
+   * scaling never applies at 0; see task-12 brief). extractRuns (real DOM
+   * text.ts text) sets it from the rect; walk.ts's `markerOps` sets it from a
+   * layout probe, because a list marker IS one laid-out string even though it
+   * has no client rect of its own. Every other synthesized run (pseudo
+   * content, a logo monogram) sets 0 rather than guess.
    */
   widthPx: number
   /**
    * True for text that is DECORATION rather than résumé content — SVG logo
-   * monogram marks, CSS `::before`/`::after`/`::marker` separator and bullet
-   * glyphs. paint.ts draws these as vector glyph outlines (fontkit) instead
-   * of a real PDF text-showing operator, so they stay pixel-identical without
-   * polluting the extractable text layer an ATS reads (see GitHub issue #4
-   * and the task-10b brief, defect B). Real DOM text (text.ts's extractRuns)
-   * is always `false` — never touch this rule for actual résumé content.
+   * monogram marks and CSS `::before`/`::after` separator glyphs. paint.ts
+   * draws these as vector glyph outlines (fontkit) instead of a real PDF
+   * text-showing operator, so they stay pixel-identical without polluting the
+   * extractable text layer an ATS reads (see GitHub issue #4 and the task-10b
+   * brief, defect B). Real DOM text (text.ts's extractRuns) is always `false`
+   * — never touch this rule for actual résumé content, and a LIST MARKER is
+   * actual content: it is the only thing saying where one item ends and the
+   * next begins, so walk.ts's `markerOps` draws it as ordinary visible text.
    */
   isDecorative: boolean
+  /**
+   * Which LINE BOX this run belongs to — the row the browser laid it out in.
+   *
+   * It is the nearest block-level ancestor of the run's text, climbed once
+   * more when that ancestor is a flex or grid ITEM, because a flex item does
+   * not own the row it sits on: its container does. So an entry's title and
+   * its date (two blocks in one `.rm-item-head` flex row) share an id, and so
+   * do a header's contact items, while a sidebar term and a main-column bullet
+   * that happen to sit at the same height never can — the climb stops inside
+   * the column (walk.ts's `lineBoxId`).
+   *
+   * paint.ts needs it to decide where a VISIBLE space may be drawn to bridge a
+   * gap between two runs. A run with no id (a synthesized pseudo/marker run,
+   * anything walk.ts could not place) is never bridged.
+   *
+   * Why the file needs one at all: between two runs with an empty void between
+   * them, PyMuPDF - and viewers that group the way it does - read separate
+   * LINES, so drag-selecting a contact row jumps from item to item and an
+   * extractor emits each one on its own line. pdf.js hides this by inventing a
+   * space from the geometry; the others do not. One real space, stretched to
+   * the gap, makes every engine agree it is one line.
+   */
+  lineBoxId?: number
 }
 
 /**
@@ -129,6 +159,13 @@ interface DrawOpChrome {
    * clamped to that page's own height, instead of assigning it to a single
    * page's band the way ordinary content ops are assigned. Absent (not
    * `false`) on every op for a single-page document's ordinary content.
+   *
+   * The >= 96% test measures HEIGHT, so the tag alone does not establish
+   * that the rect covers the document — a page-tall decoration hung near the
+   * foot of a document barely longer than one page passes it too. paint.ts's
+   * `isDocumentGround` re-checks that the rect starts at the document's top
+   * before granting the full-bleed repeat; read its comment before trusting
+   * this flag anywhere else.
    */
   pageChrome?: true
 }
@@ -240,6 +277,17 @@ export type DrawOp = DrawOpChrome &
         fill?: Rgba
         strokeWidthPx: number
         viewBox: [number, number, number, number]
+        /**
+         * A rounded box the path is clipped to, in the same root-relative
+         * CSS-px space as `xPx/yPx` — the `<img>`'s own BORDER box when it
+         * carries a border-radius (walk.ts's `svgLogoOps`). A drawn portrait
+         * fills its whole viewBox with a background rect, and the photo slot's
+         * default shape is a full circle: without the clip the file showed a
+         * square of backdrop where the page shows a disc. Absent for every
+         * unrounded source, which keeps the common case on exactly the
+         * operators it had before.
+         */
+        clip?: { xPx: number; yPx: number; wPx: number; hPx: number; radii: CornerRadii }
       }
     | {
         kind: 'text'

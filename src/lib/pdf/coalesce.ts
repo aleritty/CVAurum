@@ -26,6 +26,9 @@ function sameStyle(a: TextRun, b: TextRun): boolean {
     a.letterSpacingPx === b.letterSpacingPx &&
     a.smallCapsScale === b.smallCapsScale &&
     a.isDecorative === b.isDecorative &&
+    // Two runs the browser laid out in different ROWS are never one run,
+    // however alike they look - see TextRun.lineBoxId.
+    a.lineBoxId === b.lineBoxId &&
     // Decoration is RULED by the painter rather than drawn by the font, so two
     // runs differing only in underline or strike look identical to every other
     // test here. Merging them keeps the first run's flags and silently drops

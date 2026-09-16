@@ -36,8 +36,7 @@ import { fitRulesOf } from '@/lib/fitReadout'
 import { TemplateRenderer } from '@/templates/TemplateRenderer'
 import { pxToPt } from './units'
 import { buildDrawList, extractPageBlocks } from './walk'
-import { keepHyphenatedWordsWhole } from './hyphens'
-import { substituteUnsupportedChars } from './charFallback'
+import { preparePrintTree } from './prepareTree'
 import { visualLines } from './text'
 import type { PageBlock } from './paginate'
 import { paginate, PaginationImpossibleError, type Pagination, type PaginationInput } from './paginate'
@@ -67,6 +66,7 @@ declare global {
      *  computes itself via `extractPageBlocks` + `paginate` on the preview's
      *  measure portal — the WYSIWYG parity guarantee (spec section 7). */
     __cvaLastPaginationCuts?: number[]
+    __cvaLastPaginationInput?: Record<string, unknown>
     __cvaLastPaginationBlocks?: { kind: string; topPx: number; bottomPx: number; keepWithNext?: boolean }[]
     __cvaLastCutReasons?: string[]
     /** DEV: the scale auto-fit settled on for the last export. */
@@ -187,10 +187,7 @@ export async function renderResumePdf(doc: ResumeDocument): Promise<Uint8Array> 
      * which React reconciles without touching the mutated text nodes. */
     {
       const sheetEarly = container.firstElementChild as HTMLElement | null
-      if (sheetEarly) {
-        substituteUnsupportedChars(sheetEarly)
-        keepHyphenatedWordsWhole(sheetEarly)
-      }
+      preparePrintTree(sheetEarly)
     }
 
     if (doc.metadata.page.autoFit) {
@@ -280,8 +277,7 @@ export async function renderResumePdf(doc: ResumeDocument): Promise<Uint8Array> 
     // cannot draw for equivalents they can. A non-breaking hyphen - what a
     // paste from Word carries - was being dropped outright, so a certificate
     // named "... (PL-300)" reached the text layer as "(PL300)".
-    substituteUnsupportedChars(sheet)
-    keepHyphenatedWordsWhole(sheet)
+    preparePrintTree(sheet)
     // Always computed (cheap: one getComputedStyle on `.rm-col-main`) — only
     // ever CONSUMED when pagination actually runs (assignOpsToPages' single-
     // page shortcut ignores it entirely), so this has zero effect on the
@@ -317,11 +313,20 @@ export async function renderResumePdf(doc: ResumeDocument): Promise<Uint8Array> 
         // Ground truth for the line-level 1:1 check: what the print DOM
         // actually draws, before it is torn down and only the canvas remains.
         ;(window as unknown as { __cvaLastVisualLines?: unknown }).__cvaLastVisualLines = visualLines(sheet)
+        // The budgets other harnesses read, plus the block list itself: a
+        // parity probe can only say WHICH block moved if it can see both
+        // sides' blocks, and the cut numbers alone never say that.
         ;(window as unknown as { __cvaLastPaginationInput?: unknown }).__cvaLastPaginationInput = {
           contentHeightPx,
           usablePageHeightPx: computeUsablePageHeightPx(pageHpx, padding),
           firstPageUsablePageHeightPx: computeFirstPageUsablePageHeightPx(pageHpx, padding),
           maxPageHeightPx: pageHpx,
+          padding,
+          blockCount: blocks.length,
+          blockTops: blocks.map((b) => Math.round(b.topPx * 100) / 100),
+          blockBottoms: blocks.map((b) => Math.round(b.bottomPx * 100) / 100),
+          keeps: blocks.map((b) => (b.keepWithNext ? 1 : 0)),
+          kinds: blocks.map((b) => b.kind),
         }
       }
     } else if (!doc.metadata.page.autoFit && doc.metadata.page.breaks.length) {

@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react'
 import type { ResumeDocument } from '@/types/document'
+import type { HeadingStyle } from '@/types/metadata'
 import { useResumeStore } from '@/store/useResumeStore'
 import { cn, DATE_LANGUAGE_OPTIONS } from '@/lib/utils'
 import { Slider, Toggle, Segmented, Select, ColorField, FieldGroup } from '../fields/Controls'
@@ -11,6 +13,7 @@ import { DESIGN_RANGES } from '@/lib/designRanges'
 import { OFFERED_WEIGHTS } from '@/lib/typeStyle'
 import type { ElementColorKey } from '@/lib/elementColors'
 import { getTemplate } from '@/templates/registry'
+import { SECTION_NUMBER_STYLES } from '@/templates/_shared/sectionNumeral'
 
 const BULLET_OPTIONS = [
   ['disc', '●'],
@@ -22,6 +25,25 @@ const BULLET_OPTIONS = [
   ['diamond', '◆'],
   ['none', '∅'],
 ] as const
+
+/**
+ * The document-wide section-heading treatments, named with the same words
+ * the section gear uses for the same eight styles, so one row cannot say
+ * "Rule" where the other says "Rule after" for the same look. '' is Auto:
+ * no document default at all, which leaves every section on the template's
+ * own - exactly what the gear's Auto means for one section.
+ */
+const HEADING_STYLE_OPTIONS: { label: string; value: '' | HeadingStyle; title: string }[] = [
+  { label: 'Auto', value: '', title: "The template's own heading style" },
+  { label: 'Underline', value: 'underline', title: 'A rule under the title' },
+  { label: 'Rule', value: 'rule-after', title: 'A rule running on after the words' },
+  { label: 'On-line', value: 'strike', title: 'The words sitting on a rule that crosses the column' },
+  { label: 'Bar', value: 'bar', title: 'A bar standing before the title' },
+  { label: 'Filled', value: 'boxed', title: 'The title in a filled block' },
+  { label: 'Lead', value: 'lead-rule', title: 'A short rule leading into the title' },
+  { label: 'Badge', value: 'badge', title: 'The title behind a badge' },
+  { label: 'Plain', value: 'plain', title: 'The words alone, no rule or fill' },
+]
 
 /** Button labels for the named weights the panel offers. */
 const WEIGHT_LABELS = { bold: 'Bold', regular: 'Regular', light: 'Light' } as const
@@ -135,6 +157,21 @@ export function DesignPanel({ doc }: { doc: ResumeDocument }) {
   const m = doc.metadata
   const twoCol = m.layout.columns === 2
 
+  // A click on a running numeral on the canvas asks for this row by name
+  // (Artboard openSectionNumbers). The panel is long, so the row is scrolled
+  // to and flashed: landing somewhere near it is not finding it.
+  const numbersRef = useRef<HTMLDivElement>(null)
+  const [numbersFlash, setNumbersFlash] = useState(false)
+  useEffect(() => {
+    const onOpen = () => {
+      numbersRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      setNumbersFlash(true)
+      setTimeout(() => setNumbersFlash(false), 1600)
+    }
+    window.addEventListener('cvaurum:open-section-numbers', onOpen)
+    return () => window.removeEventListener('cvaurum:open-section-numbers', onOpen)
+  }, [])
+
   return (
     <div className="space-y-6">
       <FieldGroup title="Accent color">
@@ -217,7 +254,7 @@ export function DesignPanel({ doc }: { doc: ResumeDocument }) {
         )}
       </FieldGroup>
 
-      <FieldGroup title="Element colors">
+      <FieldGroup title="Element colors" defaultOpen={false}>
         {ELEMENT_COLOR_ROWS.map((r) => (
           <ColorField
             key={r.key}
@@ -435,6 +472,44 @@ export function DesignPanel({ doc }: { doc: ResumeDocument }) {
           />
           <p className="-mt-1 text-[11px] text-muted-foreground">Auto keeps the template's own weights.</p>
         </div>
+        <div>
+          <label className="label">Heading style</label>
+          <div className="grid grid-cols-3 gap-1.5">
+            {HEADING_STYLE_OPTIONS.map((s) => {
+              const on = (m.typography.headingStyle ?? '') === s.value
+              return (
+                <button
+                  key={s.value || 'auto'}
+                  type="button"
+                  title={s.title}
+                  aria-pressed={on}
+                  onClick={() =>
+                    update((md) => {
+                      // Auto is the ABSENCE of a document default, not a
+                      // ninth style: the sections fall back to the template
+                      // again, and a section that set its own keeps it either
+                      // way.
+                      if (s.value) md.typography.headingStyle = s.value
+                      else delete md.typography.headingStyle
+                    })
+                  }
+                  className={cn(
+                    'min-w-0 truncate rounded-md border px-1 py-1.5 text-xs font-medium transition',
+                    on
+                      ? 'border-primary bg-primary/10 text-primary'
+                      : 'border-border text-muted-foreground hover:border-primary/50 hover:text-foreground'
+                  )}
+                >
+                  {s.label}
+                </button>
+              )
+            })}
+          </div>
+          <p className="-mt-1 text-[11px] text-muted-foreground">
+            How every section title is drawn, in one move. A section that picked its own in its Style sheet keeps it;
+            Auto hands them all back to the template.
+          </p>
+        </div>
         <Slider
           label="Heading spacing"
           value={m.typography.headingGap}
@@ -515,6 +590,17 @@ export function DesignPanel({ doc }: { doc: ResumeDocument }) {
               }
               format={(v) => `${v.toFixed(2)}em`}
             />
+            <Slider
+              label="Bullet size"
+              value={m.typography.bulletSize}
+              {...DESIGN_RANGES.bulletSize}
+              onChange={(v) =>
+                update((md) => {
+                  md.typography.bulletSize = v
+                })
+              }
+              format={(v) => `${Math.round(v * 100)}%`}
+            />
           </div>
           <p className="-mt-1 text-[11px] text-muted-foreground">
             How far bullets sit in, and the air between them.
@@ -538,12 +624,12 @@ export function DesignPanel({ doc }: { doc: ResumeDocument }) {
             }
           />
           <p className="-mt-1 text-[11px] text-muted-foreground">
-            How the 0–5 rating on skills (0–6 for languages) is shown.
+            How the 0–5 rating on skills &amp; languages is shown.
           </p>
         </div>
       </FieldGroup>
 
-      <FieldGroup title="Dates">
+      <FieldGroup title="Dates" defaultOpen={false}>
         <div>
           <label className="label">Month</label>
           <Segmented
@@ -750,6 +836,61 @@ export function DesignPanel({ doc }: { doc: ResumeDocument }) {
           <p className="-mt-0 text-[11px] text-muted-foreground">
             Beside the content, a section title keeps to a column of its own on the left.
           </p>
+        </div>
+        {/* The running numerals before section titles, offered on EVERY
+            design. The row used to be gated - first on the design, then on
+            the design OR the current value - because only the two designs
+            that ship numerals styled one, so anywhere else the switch would
+            have drawn an unspaced, untinted span. The base stylesheet sets
+            the numeral on all of them now (artboard.css), so the reason for
+            the gate is gone and the answer is the same everywhere: numbering
+            is a choice about the résumé, not a property of the design.
+            A second, older copy of this same switch sat further down the
+            group under its own gate. One field written from two rows meant
+            the panel offered the identical switch twice on the two numbered
+            designs; that copy is gone. */}
+        <div
+          ref={numbersRef}
+          className={cn(
+            '-mx-1 rounded-md px-1 py-1 transition-colors',
+            numbersFlash && 'bg-primary/10 ring-1 ring-primary'
+          )}
+        >
+          <Toggle
+            label="Number the sections"
+            checked={m.layout.sectionNumbers}
+            onChange={(v) =>
+              update((md) => {
+                md.layout.sectionNumbers = v
+              })
+            }
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            A running numeral before each section title — decoration only, never in the text a parser reads.
+          </p>
+          {/* ...and in what figures. Not everyone who wants their sections
+              counted wants the two-digit folio: the same switch now covers a
+              plain figure, a numbered-list full stop and roman capitals.
+              Inside the switch's own branch, because a style picker above a
+              switch that is off would style nothing. */}
+          {m.layout.sectionNumbers && (
+            <div className="mt-2">
+              <label className="label">Numeral style</label>
+              {/* The styles and their figures come from the formatter that
+                  draws them (sectionNumeral.ts), because the section Style
+                  sheet offers the same four and two hand-written copies of
+                  the list would drift. */}
+              <Segmented
+                value={m.layout.sectionNumberStyle}
+                options={SECTION_NUMBER_STYLES}
+                onChange={(v) =>
+                  update((md) => {
+                    md.layout.sectionNumberStyle = v
+                  })
+                }
+              />
+            </div>
+          )}
         </div>
         <div>
           <label className="label">Columns</label>
@@ -1007,7 +1148,7 @@ export function DesignPanel({ doc }: { doc: ResumeDocument }) {
         </p>
       </FieldGroup>
 
-      <FieldGroup title="Links">
+      <FieldGroup title="Links" defaultOpen={false}>
         <div>
           <label className="label">Link style</label>
           <Segmented

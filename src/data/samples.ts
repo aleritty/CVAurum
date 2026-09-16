@@ -198,8 +198,8 @@ const MARKETING: ResumeContent = persona({
     { id: 'a1', title: 'Marketer of the Year', date: '2023', awarder: 'Brightwave', summary: 'Company-wide award for the pipeline turnaround.' },
   ],
   languages: [
-    { id: 'l1', language: 'English', fluency: 'Native', rating: 6 },
-    { id: 'l2', language: 'Portuguese', fluency: 'Conversational', rating: 4 },
+    { id: 'l1', language: 'English', fluency: 'Native', rating: 5 },
+    { id: 'l2', language: 'Portuguese', fluency: 'Conversational', rating: 3 },
   ],
 })
 
@@ -271,8 +271,8 @@ const GRADUATE: ResumeContent = persona({
     },
   ],
   languages: [
-    { id: 'l1', language: 'English', fluency: 'Native', rating: 6 },
-    { id: 'l2', language: 'Mandarin', fluency: 'Native', rating: 6 },
+    { id: 'l1', language: 'English', fluency: 'Native', rating: 5 },
+    { id: 'l2', language: 'Mandarin', fluency: 'Native', rating: 5 },
   ],
 })
 
@@ -332,9 +332,9 @@ const DESIGNER: ResumeContent = persona({
     { id: 'a1', title: 'Best in Show — Health UX', date: '2024', awarder: 'Austin Design Week', summary: '' },
   ],
   languages: [
-    { id: 'l1', language: 'English', fluency: 'Native', rating: 6 },
-    { id: 'l2', language: 'Hindi', fluency: 'Professional', rating: 5 },
-    { id: 'l3', language: 'Spanish', fluency: 'Conversational', rating: 4 },
+    { id: 'l1', language: 'English', fluency: 'Native', rating: 5 },
+    { id: 'l2', language: 'Hindi', fluency: 'Professional', rating: 4 },
+    { id: 'l3', language: 'Spanish', fluency: 'Conversational', rating: 3 },
   ],
   interests: [
     { id: 'i1', name: 'Letterpress printing', keywords: [] },

@@ -62,6 +62,29 @@ export const FONTS: FontDef[] = [
   { name: 'Cormorant Garamond', category: 'serif', weights: [400, 500, 600, 700] },
   { name: 'Libre Baskerville', category: 'serif', weights: [400, 700] },
   { name: 'Spectral', category: 'serif' },
+  // The one family here that is BUILT rather than fetched: its publisher ships
+  // OpenType files, not a stylesheet, so scripts/make-built-fonts.py downloads
+  // and converts it (CFF -> quadratic glyf) instead of scripts/fetch-fonts.cjs
+  // querying for it. Licence and change log: public/fonts/LICENCE.
+  //
+  // Two weights only, like PT Serif and Tinos: the family has a regular and a
+  // bold and nothing between. resolveFontKey snaps a design asking for 600 to
+  // the nearest, so 700 is what it gets.
+  //
+  // LOCA HEADROOM, measured on the built files, not estimated: short loca can
+  // address 131,070 bytes of glyf, and these land at 112,150 (400) and 106,116
+  // (700) — 18,920 B / 14.4% and 24,954 B / 19.0% under the ceiling, keeping
+  // latin, greek, cyrillic and vietnamese. That is the narrowest margin of any
+  // family here, so a tighter cu2qu tolerance or a wider kept script set could
+  // tip the regular over into long loca, which fontkit subsets into BLANK
+  // GLYPHS (see src/lib/pdf/fontsLoca.test.ts). The web woff2 is deliberately
+  // untrimmed — a browser reads long loca fine, and the trim costs the italics
+  // ễ and ắ.
+  //
+  // No SCRIPT_FALLBACKS entry: it is a Latin face (no Cyrillic at all, 24 of
+  // 57 Greek letters), so the serif chain below carries what it lacks, exactly
+  // as it does for Lato, Volkhov and the two Garamonds.
+  { name: 'Latin Modern Roman', category: 'serif', weights: [400, 700], italic: true },
 
   // — Mono —
   { name: 'JetBrains Mono', category: 'mono' },
@@ -108,10 +131,30 @@ export const SCRIPT_FALLBACKS: Record<FontCategory, string[]> = {
   handwriting: ['Inter'],
 }
 
+/**
+ * The bundled MARKS family — four bullet glyphs (◦ U+25E6, ▪ U+25AA, ✓ U+2713,
+ * ◆ U+25C6) that NO bundled family carries: measured across all 158 PDF faces
+ * and all 257 web-font subset files, 0 of each. Generated outright by
+ * scripts/make-marks-font.py, so its licence is this repository's own.
+ *
+ * It is deliberately NOT in `FONTS` — nobody should be able to set a résumé in
+ * it — and NOT in `SCRIPT_FALLBACKS`, which is about scripts and whose members
+ * must draw Cyrillic, Greek and Vietnamese. It is appended to every chain
+ * below instead, so it is the LAST thing tried: the bullet, en dash and angle
+ * quote every family already has keep coming from the résumé's own face, and
+ * only the four marks nothing has fall through to this.
+ *
+ * Both sides read the chain: the browser through `fontStack` (the CSS the
+ * canvas draws with) and the painter through `PdfFontCache.coverage`. Before
+ * it existed, a ✓ or ◆ bullet was drawn on the canvas from whatever system
+ * font the reader happened to have, and dropped from the PDF entirely.
+ */
+export const MARKS_FAMILY = 'CVAurum Marks'
+
 /** The fallback families for `name`, in order, never naming `name` itself. */
 export function scriptFallbacks(name?: string): string[] {
   const def = name ? FONT_MAP[name] : undefined
-  const chain = SCRIPT_FALLBACKS[def?.category ?? 'sans']
+  const chain = [...SCRIPT_FALLBACKS[def?.category ?? 'sans'], MARKS_FAMILY]
   return chain.filter((f) => f !== name)
 }
 

@@ -69,6 +69,10 @@ export const PageSchema = z.object({
           headline: z.boolean().default(false),
           contacts: z.boolean().default(false),
           sectionGap: z.boolean().default(false),
+          /** Keep the line height exactly as the slider says. Without it the
+           *  fit takes space from between the lines before it takes it out of
+           *  the type, which is the cheaper of the two to a reader. */
+          leading: z.boolean().default(false),
         })
         .default({}),
     })
@@ -110,6 +114,26 @@ export const ThemeSchema = z.object({
   footer: z.string().optional(),
 })
 
+/**
+ * How a section title is decorated. ONE vocabulary for both levels that can
+ * set it - the document's default (typography.headingStyle) and a section's
+ * own (layout.sectionSettings[key].headingStyle) - so the two can never
+ * drift into offering a style the other drops. Widened, never renamed: an
+ * unknown value fails the whole document parse and a stored résumé would
+ * come back on defaults.
+ */
+export const HEADING_STYLES = [
+  'underline',
+  'rule-after',
+  'bar',
+  'boxed',
+  'lead-rule',
+  'badge',
+  'strike',
+  'plain',
+] as const
+export type HeadingStyle = (typeof HEADING_STYLES)[number]
+
 export const TypographySchema = z.object({
   /** body font family name (must exist in the font registry) */
   fontFamily: z.string().default('Inter'),
@@ -125,6 +149,11 @@ export const TypographySchema = z.object({
   letterSpacing: z.number().min(-0.05).max(0.2).default(0),
   /** heading size scale relative to body */
   headingScale: z.number().min(1).max(2.4).default(1.5),
+  /** The name as an exact multiple of the body size. Left unset, the name is
+   *  derived from headingScale, which cannot go below 2.17x the body - too
+   *  large for a plain résumé, where the name sits about 1.7x the body. Set,
+   *  it says the size outright. Optional, so no existing document moves. */
+  nameScale: z.number().min(1.1).max(3.2).optional(),
   /** section title size as a multiple of the body size (1.06 is what the page always drew) */
   sectionTitleScale: z.number().min(0.8).max(1.6).default(1.06),
   /** headline size as a multiple of the body size */
@@ -147,6 +176,15 @@ export const TypographySchema = z.object({
   nameWeight: z.enum(['bold', 'regular', 'light']).optional(),
   /** weight of section titles; unset keeps the template's own */
   headingWeight: z.enum(['bold', 'regular']).optional(),
+  /** How every section title is decorated, for the WHOLE document; unset
+   *  keeps the template's own, which is what a section's Auto has always
+   *  meant. This is a DEFAULT, not an override: a section that set its own
+   *  headingStyle still wins. Restyling the headings of a nine-section
+   *  résumé through the gear alone measured 27 clicks and 9 hovers (driven
+   *  on the sample document, 2026-09-14); the only one-gesture route was the
+   *  style painter's "All", which clears all 16 style fields before it
+   *  paints and so takes every other per-section choice down with it. */
+  headingStyle: z.enum(HEADING_STYLES).optional(),
   /** air between a section title and its body, as a multiple of the gap the template draws (1 is what the page always drew) */
   headingGap: z.number().min(0.5).max(2).default(1),
   /** width of the rule under a section title, in px; unset keeps the template's own */
@@ -157,6 +195,9 @@ export const TypographySchema = z.object({
   bulletIndent: z.number().min(0.5).max(2.5).default(1.05),
   /** vertical space between two bullets, in em of the base size */
   bulletGap: z.number().min(0).max(1).default(0.2),
+  /** how big the mark itself is drawn, as a multiple of the body size; 1 is
+   *  the size the browser draws for the text it sits beside */
+  bulletSize: z.number().min(0.6).max(1.8).default(1),
   /** how skill/language proficiency ratings render (dots/bars/stars meter, plain text, or hidden) */
   proficiency: z.enum(['dots', 'bars', 'stars', 'text', 'none']).default('dots'),
 })
@@ -192,6 +233,17 @@ export const LayoutSchema = z.object({
     .optional(),
   /** Decorative running numbers before section titles (01, 02, ...). */
   sectionNumbers: z.boolean().default(false),
+  /** How that running numeral is SET, once it is drawn. The switch above
+   *  says whether to number the sections at all; this says in what figures.
+   *  'padded' is the two-digit folio every numbered design has always drawn
+   *  (01, 02), and is the default so an existing file is unchanged; 'plain'
+   *  is the bare figure (1, 2); 'dot' is the figure with a full stop after
+   *  it (1., 2.), which reads as a list rather than as a folio; 'roman' is
+   *  upper-case roman (I, II, III), which several designs' capital headings
+   *  were already set for. Decoration in every style - the painter draws it
+   *  as outlines and the Word file and the ATS text never carry it - so the
+   *  choice cannot change a word a parser reads. */
+  sectionNumberStyle: z.enum(['padded', 'plain', 'dot', 'roman']).default('padded'),
   /** which side the sidebar sits on (only used when columns === 2) */
   sidebar: z.enum(['left', 'right']).default('left'),
   /** sidebar width as a fraction of content width (0.28 - 0.42) */
@@ -220,10 +272,12 @@ export const LayoutSchema = z.object({
         showLocation: z.boolean().optional(),
         showSummary: z.boolean().optional(),
         showKeywords: z.boolean().optional(),
-        /** per-section heading treatment (overrides the template's) */
-        headingStyle: z
-          .enum(['underline', 'rule-after', 'bar', 'boxed', 'lead-rule', 'badge', 'strike', 'plain'])
-          .optional(),
+        /** Per-section heading treatment. Beats the document's own default
+         *  (typography.headingStyle) where it is set; unset follows it, and
+         *  follows the template where that is unset too. Same vocabulary as
+         *  the document level (HEADING_STYLES), so neither level can offer a
+         *  style the other drops. */
+        headingStyle: z.enum(HEADING_STYLES).optional(),
         /** how the skills section displays its keywords (skills section only) */
         // 'stacked' puts the group name on its own line with the keyword
         // list beneath it, rather than running the list on after the name.
@@ -313,6 +367,10 @@ export const LayoutSchema = z.object({
    * only ever ADDED here: an unknown value fails the whole metadata parse
    * and a stored document would come back on defaults.
    */
+  /** What sits between the keywords of a skill group, a course list or an
+   *  interest: the middot the page always drew, or a comma, which is what a
+   *  plain résumé uses. Defaults to the middot, so no existing file moves. */
+  keywordSeparator: z.enum(['middot', 'comma', 'pipe', 'slash', 'space']).default('middot'),
   sectionIconStyle: z.enum(['folio', 'chip', 'plain', 'filled', 'circle', 'outline', 'none']).default('folio'),
   /** How large the section-heading badge is, for every icon style. */
   sectionIconSize: z.enum(['s', 'm', 'l']).default('m'),

@@ -49,11 +49,15 @@ describe('applyTemplateToMetadata keeps the bullet geometry', () => {
   // The indent and the gap are the author's, like the marker style: a
   // template switch adopts the new fonts and sizes but must not put a
   // hand-set bullet indent back on the default.
-  it('carries bulletIndent and bulletGap across a switch', () => {
-    const cur = MetadataSchema.parse({ template: 'modern', typography: { bulletIndent: 1.6, bulletGap: 0.45 } })
+  it('carries bulletIndent, bulletGap and bulletSize across a switch', () => {
+    const cur = MetadataSchema.parse({
+      template: 'modern',
+      typography: { bulletIndent: 1.6, bulletGap: 0.45, bulletSize: 1.4 },
+    })
     const next = applyTemplateToMetadata(cur, defaultsFor('sapphire', 2))
     expect(next.typography.bulletIndent).toBe(1.6)
     expect(next.typography.bulletGap).toBe(0.45)
+    expect(next.typography.bulletSize).toBe(1.4)
   })
 })
 
@@ -124,6 +128,32 @@ describe('applyTemplateToMetadata keeps the heading spacing and rule width', () 
   it('an undecided rule width stays undecided', () => {
     const cur = MetadataSchema.parse({ template: 'modern' })
     expect(applyTemplateToMetadata(cur, defaultsFor('aurum', 1)).typography.headingRuleWidth).toBeUndefined()
+  })
+})
+
+describe('applyTemplateToMetadata keeps the document-wide heading style', () => {
+  // An author who set every section title to a filled block meant the
+  // résumé, not the design they happened to be on - the same way the heading
+  // case and the weights are theirs across a switch.
+  it('carries the style across a switch', () => {
+    const cur = MetadataSchema.parse({ template: 'modern', typography: { headingStyle: 'boxed' } })
+    expect(applyTemplateToMetadata(cur, defaultsFor('sapphire', 2)).typography.headingStyle).toBe('boxed')
+  })
+
+  it('an undecided style stays undecided, so the new template draws its own', () => {
+    const cur = MetadataSchema.parse({ template: 'modern' })
+    expect(applyTemplateToMetadata(cur, defaultsFor('aurum', 1)).typography.headingStyle).toBeUndefined()
+  })
+
+  it('a section that chose for itself still keeps its own choice across the switch', () => {
+    const cur = MetadataSchema.parse({
+      template: 'modern',
+      typography: { headingStyle: 'boxed' },
+      layout: { sectionSettings: { work: { headingStyle: 'bar' } } },
+    })
+    const next = applyTemplateToMetadata(cur, defaultsFor('sapphire', 2))
+    expect(next.typography.headingStyle).toBe('boxed')
+    expect(next.layout.sectionSettings.work.headingStyle).toBe('bar')
   })
 })
 
@@ -204,6 +234,7 @@ describe('applyTemplateToMetadata keeps the signature layout choices', () => {
     doc.metadata.layout.footer = ['languages']
     doc.metadata.layout.stats = true
     doc.metadata.layout.sectionNumbers = true
+    doc.metadata.layout.sectionNumberStyle = 'roman'
     doc.metadata.theme.artBand = 'emerald'
     const next = applyTemplateToMetadata(doc.metadata, getTemplate('clarity').defaults)
     expect(next.layout.metaColumn).toBe('margin')
@@ -213,6 +244,20 @@ describe('applyTemplateToMetadata keeps the signature layout choices', () => {
     expect(next.layout.stats).toBe(true)
     expect(next.layout.sectionNumbers).toBe(true)
     expect(next.theme.artBand).toBe('emerald')
+  })
+
+  // Whether to number at all is the template's to offer; what the numeral
+  // LOOKS like is nobody's but the author's. No design ships a style of its
+  // own, so there is nothing for a switch to overwrite it with - it simply
+  // travels, the way the date format and the link style do.
+  it('keeps the numeral style across a template switch, in both directions', () => {
+    const cur = MetadataSchema.parse({ template: 'broadsheet', layout: { sectionNumberStyle: 'roman' } })
+    expect(applyTemplateToMetadata(cur, getTemplate('modern').defaults).layout.sectionNumberStyle).toBe('roman')
+    expect(applyTemplateToMetadata(cur, getTemplate('marquee').defaults).layout.sectionNumberStyle).toBe('roman')
+    // An author who never chose still lands on the figures every numbered
+    // design has always drawn.
+    const plain = MetadataSchema.parse({ template: 'modern' })
+    expect(applyTemplateToMetadata(plain, getTemplate('broadsheet').defaults).layout.sectionNumberStyle).toBe('padded')
   })
 
   it('lets a template that ships its own art band light it up when the author chose none', () => {

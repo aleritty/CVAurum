@@ -5,6 +5,7 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
 import type { ResumeDocument } from '@/types/document'
+import { contactLines } from './contacts'
 import type { RenderMode, TemplateConfig } from '@/types/template'
 import { fontStack, ensureFont } from '@/data/fonts'
 import { MM_TO_PX, PAGE_DIMENSIONS } from '@/types/metadata'
@@ -14,6 +15,7 @@ import { headingCaseClasses, headingVars, typeScaleVars } from '@/lib/typeStyle'
 import { elementColorVars, lighten, readableOn, veilAlpha, withAlpha } from '@/lib/elementColors'
 import { resolveStatTiles } from '@/lib/stats'
 import type { FitVector } from '@/lib/fitOnePage'
+import { fitLineHeight } from '@/lib/fitOnePage'
 
 const FIT_AS_SET: FitVector = { type: 1, space: 1 }
 import { applyKeywordFit, fitHeadingWords, refitWhenFontsReady } from '@/lib/pdf/keywordFit'
@@ -25,6 +27,9 @@ import { SectionGear } from './SectionGear'
 import { HeaderGear } from './HeaderGear'
 import { ART_BAND_GROUNDS, artBandSrc } from './headerStyles'
 import { keepEntriesOn, sectionOverrideClasses } from './sectionClasses'
+import { sectionNumeral } from './sectionNumeral'
+import { useEditorStore } from '@/store/useEditorStore'
+import { usePhotoPicker } from '@/components/editor/usePhotoPicker'
 import { sectionIconFor } from '@/components/icons/sectionIcons'
 import { FolioIcon, folioIconKind } from './folioIcons'
 
@@ -78,10 +83,31 @@ const PT_TO_PX = 96 / 72
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 
 /** CSS `list-style-type` values per bullet style (string markers need quoting). */
+/**
+ * Every bullet style is a STRING marker — a real character the browser draws
+ * from a real font.
+ *
+ * disc/circle/square used to be the UA keywords, which Chromium draws as
+ * generated SHAPES with no glyph and no text behind them. That cost the export
+ * twice over: the painter had to reproduce each shape as a vector, and then
+ * hide an invisible "•" underneath it so a copied list still had item
+ * boundaries — which is exactly the "text drawn invisibly" an ATS scanner
+ * flags. As characters, the same marks are drawn once, from the same outlines,
+ * on the canvas and in the file, and an extractor reads what the reader sees.
+ *
+ * • – › are in every bundled family (measured: 158/158 PDF instances), so
+ * those three come from the résumé's own face. ◦ ▪ ✓ ◆ are in none of them and
+ * come from the bundled marks family at the end of every stack
+ * (src/data/fonts.ts, scripts/make-marks-font.py) — before that, ✓ and ◆ were
+ * drawn from whatever font the reader's machine happened to have.
+ *
+ * The two trailing spaces are the gap between the mark and the text, and are
+ * part of the marker string on every style so they all indent alike.
+ */
 const BULLET_TYPE: Record<string, string> = {
-  disc: 'disc',
-  circle: 'circle',
-  square: 'square',
+  disc: '"•  "',
+  circle: '"◦  "',
+  square: '"▪  "',
   dash: '"–  "',
   arrow: '"›  "',
   check: '"✓  "',
@@ -98,10 +124,15 @@ function useVars(doc: ResumeDocument, fit: FitVector): CSSProperties {
     // the sliders say however far the fit moves (fitOnePage.ts fitToPages).
     const fsBase = t.fontSize * PT_TO_PX
     const fs = fsBase * fit.type
-    const nameSize = (lock.name ? fsBase : fs) * (1.55 + clamp(t.headingScale, 1, 2.6) * 0.62)
+    // An exact scale when the design states one, else the old derivation.
+    const nameMul = t.nameScale ?? 1.55 + clamp(t.headingScale, 1, 2.6) * 0.62
+    const nameSize = (lock.name ? fsBase : fs) * nameMul
     return {
       '--rm-fs': `${fs.toFixed(2)}px`,
-      '--rm-lh': String(t.lineHeight),
+      // Leading rides the SPACING scale, bounded (fitOnePage.ts): the
+      // fit's cheapest lever, and the one it used to have to buy by
+      // shrinking the type.
+      '--rm-lh': String(fitLineHeight(t.lineHeight, fit.space, lock.leading)),
       '--rm-ls': `${t.letterSpacing}em`,
       '--rm-name-size': `${nameSize.toFixed(2)}px`,
       '--rm-section-title-size': `${(fs * t.sectionTitleScale).toFixed(2)}px`,
@@ -184,6 +215,10 @@ function useVars(doc: ResumeDocument, fit: FitVector): CSSProperties {
       // Both in em so they ride the base size and the one-page fit with it.
       '--rm-bullet-indent': `${t.bulletIndent}em`,
       '--rm-bullet-gap': `${t.bulletGap}em`,
+      // On the MARKER's own font-size, not a painter constant: that is the
+      // one number the browser's disc and our painter's disc both read, so
+      // the page and the export cannot disagree about it.
+      '--rm-bullet-size': `${t.bulletSize}em`,
       // The headline and contact scales, the two weights, and the multiplier
       // a template's own section-title ratio rides on (typeStyle.ts).
       ...typeScaleVars(t),
@@ -207,38 +242,26 @@ interface ContactEntry {
   href?: string
 }
 
+/** The shared list, wearing icons. Which rows there are, in which order and
+ *  what words they carry is contacts.ts's answer - the ATS text reads the same
+ *  list, and the two drifted for as long as each built its own. */
 function buildContacts(doc: ResumeDocument): ContactEntry[] {
-  const b = doc.content.basics
-  // How URLs READ is the author's choice; where they POINT never changes.
-  const disp = doc.metadata.links?.display ?? 'pretty'
-  const out: ContactEntry[] = []
   const { Mail, Phone, Globe, MapPin } = ContactIcons
-  const loc = [b.location?.city, b.location?.region].filter(Boolean).join(', ')
-  const email = cleanEmail(b.email)
-  if (email) out.push({ icon: <Mail />, text: email, href: `mailto:${email}` })
-  if (b.phone) out.push({ icon: <Phone />, text: b.phone, href: `tel:${b.phone.replace(/[^\d+]/g, '')}` })
-  if (loc) out.push({ icon: <MapPin />, text: loc })
-  // The author's own words win over anything derived from the address: a link
-  // labelled "Portfolio" is what they typed, not what the URL happens to say.
-  if (b.url || b.urlLabel) {
-    const UrlIcon = b.urlIcon ? contactIcon(undefined, b.urlIcon) : Globe
-    out.push({ icon: <UrlIcon />, text: b.urlLabel?.trim() || prettyUrl(b.url, disp), href: safeHref(b.url) })
-  }
-  for (const p of b.profiles ?? []) {
-    const Icon = contactIcon(p.network, p.icon)
-    // Keep profiles legible even when the template hides icons: prefer the clean
-    // URL (so LinkedIn vs GitHub is obvious), else show "Network · handle" rather
-    // than a bare, ambiguous username.
-    const handle = (p.username || '').replace(/^@+/, '')
-    const text =
-      p.label?.trim() ||
-      prettyUrl(p.url, disp) ||
-      (p.network ? (handle ? `${p.network} · ${handle}` : p.network) : handle)
-    // Same rule as the canvas: no address and no handle means no contact,
-    // however the row happens to be named.
-    if (text && (p.url?.trim() || handle)) out.push({ icon: <Icon />, text, href: safeHref(p.url) })
-  }
-  return out
+  return contactLines(doc).map((c) => {
+    const Icon =
+      c.kind === 'email'
+        ? Mail
+        : c.kind === 'phone'
+          ? Phone
+          : c.kind === 'location'
+            ? MapPin
+            : c.kind === 'url'
+              ? c.icon
+                ? contactIcon(undefined, c.icon)
+                : Globe
+              : contactIcon(c.network, c.icon)
+    return { icon: <Icon />, text: c.text, href: c.href }
+  })
 }
 
 /**
@@ -500,6 +523,65 @@ function EditableContacts({ doc, edit, icons }: { doc: ResumeDocument; edit: Edi
   )
 }
 
+/**
+ * The edit-only cluster that hangs off the header's identity mark.
+ *
+ * The picture itself is the button — a click on it opens the same
+ * file → crop → save flow the panel uses — and the labelled chip beside the
+ * hide cross is what SAYS so, because a clickable picture with no affordance
+ * is a feature nobody finds (reported: "here on the canvas, no option to
+ * change the thing or pic"). The chip is also the keyboard route: an <img>
+ * with a click handler is reachable by no key, a <button> with a label is.
+ *
+ * Both controls are `no-print` and absolutely positioned, so the edit tree
+ * still measures exactly like the export tree.
+ */
+function EditableVisual({
+  kind,
+  children,
+  onHide,
+}: {
+  kind: 'photo' | 'monogram'
+  /** The mark itself, given the opener so the picture can carry the click. */
+  children: (openPicker: () => void) => ReactNode
+  onHide: () => void
+}) {
+  const picker = usePhotoPicker()
+  const add = kind === 'monogram'
+  return (
+    <span className="rm-visual-wrap">
+      {children(picker.open)}
+      <button
+        type="button"
+        className="rm-visual-swap no-print"
+        contentEditable={false}
+        title={add ? 'Add a photo in place of the monogram' : 'Change this photo'}
+        aria-label={add ? 'Add photo' : 'Change photo'}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={picker.open}
+      >
+        {add ? 'Add photo' : 'Change'}
+      </button>
+      <button
+        type="button"
+        className="rm-visual-hide no-print"
+        contentEditable={false}
+        title={
+          add
+            ? 'Hide monogram (turn back on via the header’s Style button)'
+            : 'Hide photo (turn back on via the header’s Style button)'
+        }
+        aria-label={add ? 'Hide monogram' : 'Hide photo'}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onHide}
+      >
+        ×
+      </button>
+      {picker.ui}
+    </span>
+  )
+}
+
 function Photo({ doc, editMeta }: { doc: ResumeDocument; editMeta?: MetaEditFn }) {
   const { showPhoto, photoShape } = doc.metadata.layout
   const img = doc.content.basics.image
@@ -511,24 +593,25 @@ function Photo({ doc, editMeta }: { doc: ResumeDocument; editMeta?: MetaEditFn }
   const photo = <img className={`rm-photo ${photoShape}`} src={img} alt={doc.content.basics.name} />
   if (!editMeta) return photo
   return (
-    <span className="rm-visual-wrap">
-      {photo}
-      <button
-        type="button"
-        className="rm-visual-hide no-print"
-        contentEditable={false}
-        title="Hide photo (turn back on via the header's Style button)"
-        aria-label="Hide photo"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() =>
-          editMeta((m) => {
-            m.layout.showPhoto = false
-          })
-        }
-      >
-        ×
-      </button>
-    </span>
+    <EditableVisual
+      kind="photo"
+      onHide={() =>
+        editMeta((m) => {
+          m.layout.showPhoto = false
+        })
+      }
+    >
+      {(open) => (
+        <img
+          className={`rm-photo ${photoShape}`}
+          src={img}
+          alt={doc.content.basics.name}
+          title="Click to change this photo"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={open}
+        />
+      )}
+    </EditableVisual>
   )
 }
 
@@ -550,24 +633,26 @@ function Monogram({ doc, editMeta }: { doc: ResumeDocument; editMeta?: MetaEditF
   )
   if (!editMeta) return mark
   return (
-    <span className="rm-visual-wrap">
-      {mark}
-      <button
-        type="button"
-        className="rm-visual-hide no-print"
-        contentEditable={false}
-        title="Hide monogram (turn back on via the header's Style button)"
-        aria-label="Hide monogram"
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() =>
-          editMeta((m) => {
-            m.layout.monogram = false
-          })
-        }
-      >
-        ×
-      </button>
-    </span>
+    <EditableVisual
+      kind="monogram"
+      onHide={() =>
+        editMeta((m) => {
+          m.layout.monogram = false
+        })
+      }
+    >
+      {(open) => (
+        <div
+          className={`rm-monogram ${photoShape}`}
+          aria-hidden
+          title="Click to add a photo instead"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={open}
+        >
+          <span>{initials}</span>
+        </div>
+      )}
+    </EditableVisual>
   )
 }
 
@@ -855,6 +940,19 @@ function Header({
   )
 }
 
+/**
+ * Opens the Design panel at the row that turns the running section numbers
+ * on and off (DesignPanel listens for the event). Same shape as the Magic
+ * fit chip's opener: the tab and the panel first, the event a beat later, so
+ * the panel is mounted and listening by the time it lands.
+ */
+function openSectionNumbers() {
+  const ed = useEditorStore.getState()
+  ed.setLeftTab('design')
+  ed.setLeftOpen(true)
+  setTimeout(() => window.dispatchEvent(new Event('cvaurum:open-section-numbers')), 80)
+}
+
 function Section({
   sectionKey,
   doc,
@@ -895,7 +993,11 @@ function Section({
   const keepEntries = compact || keepEntriesOn(doc.metadata.page, ss)
   const cls = [
     'rm-section',
-    ...sectionOverrideClasses(ss),
+    // The document's own heading style rides in here as the section's
+    // default: sectionOverrideClasses resolves section-over-document, so one
+    // choice in Design restyles every heading and a section that decided for
+    // itself still wins.
+    ...sectionOverrideClasses(ss, doc.metadata.typography),
     ...(keepEntries ? ['rm-keep-entries'] : []),
     ...(compact ? ['rm-section-compact'] : []),
   ].join(' ')
@@ -915,11 +1017,35 @@ function Section({
   // in page order. It is decorative text (the Deco atom): the painter draws
   // it as outlines with no text layer, and Word and the ATS text never see
   // it, so a parser reads the heading's own words alone.
-  const number = doc.metadata.layout.sectionNumbers && index !== undefined ? String(index + 1).padStart(2, '0') : null
+  // What SHAPE it takes - 01, 1, 1. or I - is the document's own choice, and
+  // it is asked of the shared formatter rather than spelled here, so the
+  // preview tree and the export tree cannot disagree about one document.
+  const number =
+    doc.metadata.layout.sectionNumbers && index !== undefined
+      ? sectionNumeral(index, doc.metadata.layout.sectionNumberStyle)
+      : null
   return (
     <section className={cls} style={secStyle} data-section={sectionKey}>
       {editMeta ? <SectionGear sectionKey={sectionKey} doc={doc} editMeta={editMeta} /> : null}
-      <h2 className="rm-section-title">
+      <h2
+        className="rm-section-title"
+        // A running numeral is decoration - an aria-hidden outline, not
+        // editable text - so a click on one cannot edit it in place. It asks
+        // the Design panel for the switch that draws it, the way a stat tile
+        // asks the header for its Numbers group. People who dislike the
+        // numerals had nothing to click, and on every design but the two
+        // that ship them, no switch to find at all (measured: 2 of 58).
+        // Delegated from the heading rather than wrapped around the
+        // numeral: the edit tree and the export tree have to hold the same
+        // elements, and a wrapper would exist in only one of them.
+        onClick={
+          edit && number
+            ? (e) => {
+                if ((e.target as HTMLElement).closest('.rm-section-number')) openSectionNumbers()
+              }
+            : undefined
+        }
+      >
         {showIcon ? <SectionIcon sectionKey={sectionKey} style={iconStyle} /> : null}
         {number ? <Deco className="rm-section-number">{number}</Deco> : null}
         {/* A linked heading points where the author says, and the exporter

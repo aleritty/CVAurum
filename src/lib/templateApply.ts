@@ -77,6 +77,10 @@ export function applyTemplateToMetadata(cur: Metadata, defaults: TemplateDefault
   // What the document's previous template gave it, so a value that only
   // came from that template is never mistaken for the author's own choice.
   // An unknown or missing template id reads as the schema defaults.
+  // The schema's own answers, for the fields where "the author never chose"
+  // means "still on the default" rather than "unchanged from the previous
+  // template".
+  const BASE = defaultMetadata()
   const prev = cur.template ? getTemplate(cur.template).defaults.layout : defaultMetadata().layout
   const prevArt = cur.template ? getTemplate(cur.template).defaults.theme.artBand : defaultMetadata().theme.artBand
 
@@ -113,9 +117,16 @@ export function applyTemplateToMetadata(cur: Metadata, defaults: TemplateDefault
       bulletIndent: cur.typography.bulletIndent,
       bulletGap: cur.typography.bulletGap,
       proficiency: cur.typography.proficiency,
-      // How the prose is set is the author's call about their own words, not
-      // part of a template's identity, so it survives a switch.
-      align: cur.typography.align,
+      bulletSize: cur.typography.bulletSize,
+      // How the prose is set is the author's call about their own words, so a
+      // document that HAS chosen keeps its choice across every switch - but a
+      // document still sitting on the schema's ragged right never chose, and
+      // a design whose whole identity is a justified measure has no other way
+      // to say so: the page is the only place `align` can be stated, and this
+      // line used to drop it on the floor for every template. Measured on the
+      // registry before the change: exactly one design states an alignment of
+      // its own, so nothing else on the page moves.
+      align: chosen(cur.typography.align, BASE.typography.align, defaults.typography.align),
       // How far the section titles, the headline and the contacts sit from
       // the body, the heading case and the two weights are the author's too;
       // an undecided case or weight stays undecided.
@@ -124,7 +135,18 @@ export function applyTemplateToMetadata(cur: Metadata, defaults: TemplateDefault
       contactScale: cur.typography.contactScale,
       headingCase: cur.typography.headingCase,
       nameWeight: cur.typography.nameWeight,
-      headingWeight: cur.typography.headingWeight,
+      // Optional, so the document CAN say "no choice" with undefined - and
+      // where it does, the template's own applies, exactly as an unset
+      // element colour takes the template's above. A weight the author set
+      // still beats it. (One design states a heading weight: a page whose
+      // headings differ from the body by case and a rule alone, where a bold
+      // title would be a different design.)
+      headingWeight: cur.typography.headingWeight ?? defaults.typography.headingWeight,
+      // The document-wide heading treatment is the author's the same way the
+      // case and the weights are: an author who set every section title to a
+      // filled block meant the résumé, not the design they had at the time.
+      // Undecided stays undecided, and the new template's own stands.
+      headingStyle: cur.typography.headingStyle,
       // The air under a heading and the weight of its rule stay too; an
       // undecided rule width stays undecided.
       headingGap: cur.typography.headingGap,
@@ -163,6 +185,12 @@ export function applyTemplateToMetadata(cur: Metadata, defaults: TemplateDefault
       // whose whole idea was a margin. So the comparison is against what
       // the previous template gave the document: unchanged means the
       // author never chose, and the new template applies.
+      // What sits between two contacts is one of these too: the design that
+      // runs its contact line as a single centred row of fields divided by a
+      // spaced dash cannot draw that row any other way, and the separator
+      // reached the document from nowhere else - the layout spread above is
+      // the DOCUMENT's, not the template's. One design states one today.
+      contactSeparator: chosen(cur.layout.contactSeparator, prev.contactSeparator, defaults.layout.contactSeparator),
       metaColumn: chosen(cur.layout.metaColumn, prev.metaColumn, defaults.layout.metaColumn),
       headingPlacement: chosen(cur.layout.headingPlacement, prev.headingPlacement, defaults.layout.headingPlacement),
       sectionFrame: chosen(cur.layout.sectionFrame, prev.sectionFrame, defaults.layout.sectionFrame),
@@ -171,6 +199,13 @@ export function applyTemplateToMetadata(cur: Metadata, defaults: TemplateDefault
       // turned on is the previous template's, not the author's.
       stats: chosen(cur.layout.stats, prev.stats, defaults.layout.stats),
       sectionNumbers: chosen(cur.layout.sectionNumbers, prev.sectionNumbers, defaults.layout.sectionNumbers),
+      // ...but the SHAPE of that numeral is not a structural choice at all,
+      // so it does not go through chosen(): it is the author's the way the
+      // heading style and the date format are, and it simply travels. Stated
+      // rather than left to the spread above because the line beside it is
+      // the opposite rule, and the two read as a pair: a design may decide
+      // whether to number, never in what figures.
+      sectionNumberStyle: cur.layout.sectionNumberStyle,
       sectionSettings: seedSectionSettings(defaults.layout.sectionSettings, cur.layout.sectionSettings),
       headings: cur.layout.headings,
     },

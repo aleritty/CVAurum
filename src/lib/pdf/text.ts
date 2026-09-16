@@ -1,4 +1,5 @@
 import { parseColor, parseFontWeight, parsePx } from './style'
+import { SOFT_HYPHEN, stripSoftHyphens } from '@/lib/hyphenate'
 import type { TextRun } from './types'
 
 /** parseColor handles rgb()/rgba(), the `color(srgb ...)` form Chromium
@@ -252,6 +253,67 @@ export function measureTextWidthPx(text: string, cssFont: string): number {
   return measureCtx!.measureText(text).width
 }
 
+let layoutWidthProbe: HTMLSpanElement | null = null
+
+/**
+ * The width the LAYOUT ENGINE gives `text`, set exactly as `cs` sets it.
+ *
+ * `measureTextWidthPx` above asks a canvas context, and a canvas context
+ * carries only the `font` shorthand: it knows nothing about `font-variant`,
+ * `font-feature-settings`, `letter-spacing` or `word-spacing`, all of which
+ * the real engine applies. That is not a rounding difference. Chromium's UA
+ * stylesheet gives every `::marker` `font-variant-numeric: tabular-nums` (so
+ * that an ordered list's numbers line up), and in Work Sans `tnum` re-cuts the
+ * SPACE — measured on marquee's own bullet, the string "•  " lays out at
+ * 1.1124 em with the property off and 1.0350 em with it on, and switching each
+ * of the eleven copied properties one at a time showed `font-variant` is the
+ * only one that moves it. Measured on canvas, the marker box therefore came
+ * out 0.077 em too wide, and every marquee bullet was drawn that far left of
+ * the mark on the page.
+ *
+ * `white-space: pre` because the strings this measures (a marker's "•  ")
+ * carry meaningful trailing spaces that normal white-space processing would
+ * collapse away.
+ *
+ * Returns 0 when there is no usable DOM — callers fall back to the canvas
+ * measurement, which is close for a face whose features leave its spaces
+ * alone.
+ */
+export function measureLaidOutWidthPx(text: string, cs: CSSStyleDeclaration): number {
+  if (!text) return 0
+  try {
+    if (typeof document === 'undefined' || !document.body) return 0
+    if (!layoutWidthProbe) {
+      const span = document.createElement('span')
+      span.setAttribute('aria-hidden', 'true')
+      span.style.position = 'fixed'
+      span.style.left = '-100000px'
+      span.style.top = '0'
+      span.style.whiteSpace = 'pre'
+      document.body.appendChild(span)
+      layoutWidthProbe = span
+    }
+    const s = layoutWidthProbe.style
+    s.fontFamily = cs.fontFamily
+    s.fontSize = cs.fontSize
+    s.fontWeight = cs.fontWeight
+    s.fontStyle = cs.fontStyle
+    s.fontStretch = cs.fontStretch
+    s.fontKerning = cs.fontKerning
+    s.fontFeatureSettings = cs.fontFeatureSettings
+    s.fontVariationSettings = cs.fontVariationSettings
+    s.fontVariant = cs.fontVariant
+    s.letterSpacing = cs.letterSpacing
+    s.wordSpacing = cs.wordSpacing
+    layoutWidthProbe.textContent = text
+    const w = layoutWidthProbe.getBoundingClientRect().width
+    layoutWidthProbe.textContent = ''
+    return Number.isFinite(w) ? w : 0
+  } catch {
+    return 0
+  }
+}
+
 /** A plain (non-DOMRect) rect for one visually-wrapped line segment of a text
  *  node — deliberately NOT a real DOMRect so callers (and their tests) can
  *  work with it without a real DOM. */
@@ -292,23 +354,49 @@ export function textNodeLineSegments(node: Text): TextLineSegment[] {
 
   const range = document.createRange()
 
+  /**
+   * A soft hyphen the engine BROKE draws a hyphen at the end of the line it
+   * broke from - and Chromium hands that hyphen's box to the FIRST CHARACTER
+   * OF THE NEXT LINE as well as to the soft hyphen itself. Measured on a
+   * 90px column of "in&shy;ter&shy;na&shy;tion&shy;al&shy;iza&shy;tion":
+   * the 't' that opens the continuation line reports TWO client rects,
+   * `top=0 left=80.9 w=4.3` (the hyphen, on the line above) and
+   * `top=16 left=0.0 w=3.6` (itself), so its bounding box spans both lines
+   * and its `top` names the wrong one. The walk below would then put that
+   * letter on the line above, and the painter would draw it there.
+   *
+   * The character's own box is always the LAST of its rects - an inherited
+   * hyphen is always to its left, on the earlier line. Only nodes that
+   * actually carry a soft hyphen pay for the extra list; every other node
+   * takes the single bounding-box read it always took.
+   */
+  const shy = node.data.indexOf(SOFT_HYPHEN) >= 0
+  const topAt = (i: number): number => {
+    range.setStart(node, i)
+    range.setEnd(node, i + 1)
+    if (!shy) return range.getBoundingClientRect().top
+    const rects = range.getClientRects()
+    return rects.length ? rects[rects.length - 1].top : range.getBoundingClientRect().top
+  }
+
   // Walk character offsets, splitting into per-line segments by comparing each
   // character's top to the previous one.
-  const offsets: Array<{ start: number; end: number }> = []
+  const offsets: Array<{ start: number; end: number; top: number }> = []
   let segStart = 0
+  let segTop = 0
   let prevTop: number | null = null
 
   for (let i = 0; i < len; i++) {
-    range.setStart(node, i)
-    range.setEnd(node, i + 1)
-    const top = range.getBoundingClientRect().top
+    const top = topAt(i)
+    if (prevTop == null) segTop = top
     if (prevTop != null && Math.abs(top - prevTop) > 1) {
-      offsets.push({ start: segStart, end: i })
+      offsets.push({ start: segStart, end: i, top: segTop })
       segStart = i
+      segTop = top
     }
     prevTop = top
   }
-  offsets.push({ start: segStart, end: len })
+  offsets.push({ start: segStart, end: len, top: segTop })
 
   // A wrap puts its space on ONE of the two lines, and Chromium is not
   // consistent about which: measured on a real export, most wrapped lines
@@ -324,16 +412,68 @@ export function textNodeLineSegments(node: Text): TextLineSegment[] {
   }
 
   const segments: TextLineSegment[] = []
-  for (const { start, end } of offsets) {
+  for (const { start, end, top } of offsets) {
     if (end <= start) continue
     range.setStart(node, start)
     range.setEnd(node, end)
-    const rect = range.getBoundingClientRect()
-    segments.push({ start, end, rect: { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right } })
+    // Same inherited-hyphen problem one level up: a segment that OPENS after
+    // a break reports the previous line's hyphen among its rects, and its
+    // bounding box would therefore start at the line above, which is the box
+    // the baseline is computed from. Union only the boxes on this segment's
+    // own line.
+    let rect: { top: number; bottom: number; left: number; right: number } | null = null
+    if (shy) {
+      for (const r of range.getClientRects()) {
+        if (Math.abs(r.top - top) > 1) continue
+        rect = rect
+          ? {
+              top: Math.min(rect.top, r.top),
+              bottom: Math.max(rect.bottom, r.bottom),
+              left: Math.min(rect.left, r.left),
+              right: Math.max(rect.right, r.right),
+            }
+          : { top: r.top, bottom: r.bottom, left: r.left, right: r.right }
+      }
+    }
+    if (!rect) {
+      const b = range.getBoundingClientRect()
+      rect = { top: b.top, bottom: b.bottom, left: b.left, right: b.right }
+    }
+    segments.push({ start, end, rect })
   }
   return segments
 }
 
+
+/* ---- what a soft-hyphen break does to the TEXT LAYER ----
+ *
+ * lib/hyphenate.ts puts soft hyphens into justified main-column prose so the
+ * engine can break a long word instead of stretching a line's word spaces
+ * (the whole reason justification was making our pages worse than ragged
+ * ones). When one of them breaks, the engine DRAWS a hyphen - but that hyphen
+ * is not a character of the text node, and the two halves of the word are.
+ *
+ * The export used to hide the break rather than write it: the line that BROKE
+ * carried the whole word (its own glyphs as real text, then the missing tail
+ * as an INVISIBLE run squeezed under the drawn hyphen), the hyphen was a
+ * vector outline, and the line that CONTINUED drew its leading fragment as
+ * outlines too so the word could not be read twice. Every extractor then read
+ * "Experienced" whole, and the panel-vs-file comparison matched word for word
+ * without anything having to know about hyphenation.
+ *
+ * It also put characters in the file that draw nothing, which is what an ATS
+ * scanner means by "text drawn invisibly" - so the file now writes the break
+ * the way every typeset document writes it. The line that breaks ends with a
+ * real, visible hyphen; the line that continues opens with the rest of the
+ * word, as real, visible text; nothing is drawn twice and nothing is hidden.
+ *
+ * Rejoining the halves is the READER's job, and it is a convention every
+ * de-hyphenating reader already implements: a letter, a hyphen, a line end, a
+ * letter is one word. _local/gate-ats-truth.cjs and _local/gate-line-1to1.cjs
+ * do exactly that before they compare (each says so in its own header), and
+ * `visualLines` below reports the same two lines the page draws, because it is
+ * the DOM side of the line-level gate and the two must describe one document.
+ */
 
 /** One rendered line of the print DOM: what it says, and where it sits. */
 export interface VisualLine {
@@ -391,9 +531,21 @@ export function visualLines(root: HTMLElement): VisualLine[] {
     const t = node as Text
     const cs = getComputedStyle(t.parentElement as Element)
     const column: 'main' | 'aside' = t.parentElement?.closest('.rm-col-aside') ? 'aside' : 'main'
-    for (const seg of textNodeLineSegments(t)) {
-      const text = applyTextTransform(collapseWhitespace(t.data.slice(seg.start, seg.end), cs.whiteSpace), cs.textTransform)
+    const segs = textNodeLineSegments(t)
+    for (let si = 0; si < segs.length; si++) {
+      const seg = segs[si]
+      // A line the hyphenator broke ends with a drawn HYPHEN, and the rest of
+      // the word is on the line below - which is what the browser draws and,
+      // since the invisible tail went away, what the file says too. This used
+      // to report the whole word up here and nothing of it down there, to
+      // match a file that carried "Experienced" whole at the end of the line
+      // it started on; both sides say the plain thing now, and the gates
+      // rejoin the two halves before comparing (see gate-line-1to1.cjs).
+      const broke = si < segs.length - 1 && t.data[seg.end - 1] === SOFT_HYPHEN
+      const raw = t.data.slice(seg.start, seg.end)
+      let text = applyTextTransform(collapseWhitespace(stripSoftHyphens(raw), cs.whiteSpace), cs.textTransform)
       if (!text.trim()) continue
+      if (broke) text += '-'
       out.push({
         topPx: seg.rect.top - rootRect.top,
         bottomPx: seg.rect.bottom - rootRect.top,
@@ -534,36 +686,109 @@ export function extractRuns(node: Text, root: HTMLElement): TextRun[] {
   const metrics = layoutMetricsFor(font)
   // Only the first line can carry the space that precedes the node.
   const lead = leadingSpaceRect(node, cs)
-  const runs: TextRun[] = []
-  for (const seg of segments) {
-    let text = applyTextTransform(collapseWhitespace(data.slice(seg.start, seg.end), cs.whiteSpace), cs.textTransform)
-    if (text.trim() === '') continue
-    // Absorb the preceding space: starting the run at the space's own left
-    // edge leaves every glyph exactly where it was - the space advances the
-    // pen by precisely the width it occupies on screen.
-    const absorb = lead && runs.length === 0 && Math.abs(lead.top - seg.rect.top) <= 1
-    if (absorb) text = ' ' + text
+  const sizePx = parsePx(cs.fontSize)
+  /** Everything a run of this node shares. Spread into each one so the three
+   *  a hyphen break adds cannot drift from the body run beside them. */
+  const style = {
+    sizePx,
+    family: cs.fontFamily,
+    weight: parseFontWeight(cs.fontWeight),
+    italic: cs.fontStyle === 'italic',
+    color,
+    letterSpacingPx: cs.letterSpacing === 'normal' ? 0 : parsePx(cs.letterSpacing),
+    smallCapsScale,
+    // `textDecorationLine` reports the decoration this element declares; it
+    // is inherited visually from an ancestor <u>/<s> through the box tree,
+    // so read the LINE property (which resolves that) rather than the
+    // shorthand.
+    ...(decorationOf(cs, 'underline') ? { underline: true as const } : {}),
+    ...(decorationOf(cs, 'line-through') ? { lineThrough: true as const } : {}),
+  }
+  const shaped = (s: string) => applyTextTransform(collapseWhitespace(stripSoftHyphens(s), cs.whiteSpace), cs.textTransform)
 
-    runs.push({
-      text,
-      xPx: (absorb ? lead!.left : seg.rect.left) - rootRect.left,
-      widthPx: seg.rect.right - (absorb ? lead!.left : seg.rect.left),
-      baselinePx: halfLeadingBaselinePx(seg.rect.top, rootRect.top, seg.rect.bottom - seg.rect.top, metrics),
-      sizePx: parsePx(cs.fontSize),
-      family: cs.fontFamily,
-      weight: parseFontWeight(cs.fontWeight),
-      italic: cs.fontStyle === 'italic',
-      color,
-      letterSpacingPx: cs.letterSpacing === 'normal' ? 0 : parsePx(cs.letterSpacing),
-      smallCapsScale,
-      // `textDecorationLine` reports the decoration this element declares; it
-      // is inherited visually from an ancestor <u>/<s> through the box tree,
-      // so read the LINE property (which resolves that) rather than the
-      // shorthand.
-      ...(decorationOf(cs, 'underline') ? { underline: true as const } : {}),
-      ...(decorationOf(cs, 'line-through') ? { lineThrough: true as const } : {}),
-      isDecorative: false,
-    })
+  // Sub-range geometry, needed only where a soft hyphen actually broke a
+  // line: where this line's letters stop, and how wide the hyphen the engine
+  // drew after them is. A node with no soft hyphen never builds the range and
+  // never measures anything extra - the loop below collapses to exactly the
+  // one-run-per-segment it was before hyphenation existed.
+  const hasSoftHyphen = data.indexOf(SOFT_HYPHEN) >= 0
+  let lazyRange: Range | null = null
+  /** The box of `[s, e)` ON the line whose top is `top` - a range that opens
+   *  just after a break also reports the previous line's drawn hyphen among
+   *  its rects (see textNodeLineSegments), and that box belongs to the line
+   *  above, not to this one. */
+  const rectOf = (s: number, e: number, top: number): { left: number; right: number } => {
+    const r = (lazyRange ??= document.createRange())
+    r.setStart(node, s)
+    r.setEnd(node, e)
+    let out: { left: number; right: number } | null = null
+    for (const box of r.getClientRects()) {
+      if (Math.abs(box.top - top) > 1) continue
+      out = out ? { left: Math.min(out.left, box.left), right: Math.max(out.right, box.right) } : { left: box.left, right: box.right }
+    }
+    return out ?? r.getBoundingClientRect()
+  }
+
+  const runs: TextRun[] = []
+  for (let si = 0; si < segments.length; si++) {
+    const seg = segments[si]
+    const broke = hasSoftHyphen && si < segments.length - 1 && data[seg.end - 1] === SOFT_HYPHEN
+    const bodyStart = seg.start
+    const bodyEnd = broke ? seg.end - 1 : seg.end
+    const baselinePx = halfLeadingBaselinePx(seg.rect.top, rootRect.top, seg.rect.bottom - seg.rect.top, metrics)
+
+    let text = shaped(data.slice(bodyStart, bodyEnd))
+    if (text.trim() !== '') {
+      const box = broke ? rectOf(bodyStart, bodyEnd, seg.rect.top) : seg.rect
+      // Absorb the preceding space: starting the run at the space's own left
+      // edge leaves every glyph exactly where it was - the space advances the
+      // pen by precisely the width it occupies on screen.
+      const absorb = lead && si === 0 && Math.abs(lead.top - seg.rect.top) <= 1
+      if (absorb) text = ' ' + text
+      const left = absorb ? lead!.left : box.left
+      runs.push({ ...style, text, xPx: left - rootRect.left, widthPx: box.right - left, baselinePx, isDecorative: false })
+    }
+
+    if (broke) {
+      // The line-end hyphen: REAL, VISIBLE text, exactly as every typeset
+      // document in the world writes it.
+      //
+      // It used to be drawn as a vector outline (an Artifact, on the argument
+      // that nobody typed it) with the rest of the word laid INVISIBLY after
+      // it, squeezed to the hyphen's own width, so that an extractor read
+      // "Experienced" whole at the end of the line it started on. That did
+      // extract beautifully, and it is also precisely the shape an ATS scanner
+      // reports as "text drawn invisibly": characters in the file that draw
+      // nothing.
+      //
+      // So the file now says what the page says - "...Experi-" here, "enced"
+      // at the head of the next line - and the comparison moves to where the
+      // convention already lives: _local/gate-ats-truth.cjs and
+      // _local/gate-line-1to1.cjs rejoin a word broken across a line end
+      // before they compare, which is what every de-hyphenating reader does.
+      // `resumeToAtsText` (the app's own "Copy as plain text") never had a
+      // line break to put a hyphen at and is untouched.
+      const inkEnd = (bodyEnd > seg.start ? rectOf(seg.start, bodyEnd, seg.rect.top) : seg.rect).right
+      const xPx = inkEnd - rootRect.left
+      const hyphenBox = rectOf(seg.end - 1, seg.end, seg.rect.top)
+      const drawnHyphenPx = hyphenBox.right - hyphenBox.left
+      const hyphenWidthPx = drawnHyphenPx > 0.01 ? drawnHyphenPx : measureTextWidthPx('-', font)
+      runs.push({
+        ...style,
+        text: '-',
+        xPx,
+        // The width the engine actually drew it at, so the painter fits the
+        // glyph to it the way it fits every other run.
+        widthPx: hyphenWidthPx,
+        baselinePx,
+        // A rule is painted against a run's own advance, and the body run
+        // above already spans the letters this hyphen follows; carrying the
+        // decoration here too would draw it twice over the same pixels.
+        underline: false,
+        lineThrough: false,
+        isDecorative: false,
+      })
+    }
   }
 
   return runs

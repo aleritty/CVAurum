@@ -14,24 +14,33 @@
  */
 import { useEffect, useMemo } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowRight, ChevronRight, Github, Wand2 } from 'lucide-react'
-import { useAppStore } from '@/store/useAppStore'
+import { ArrowRight, ChevronRight, Wand2 } from 'lucide-react'
 import { createDocument } from '@/data/defaults'
+// Written beside the images themselves, so the size in the markup is the size
+// of the file on disk and a page never reserves the wrong box for it.
+import { PAGE_IMAGE_WIDTH } from '@/data/pageImages'
 import { applyTemplateToMetadata } from '@/lib/templateApply'
 import { getTemplate } from '@/templates/registry'
 import type { ResumeDocument } from '@/types/document'
 import { PreviewThumb } from '@/components/preview/PreviewThumb'
-import { Logo } from '@/components/ui/Logo'
-import { ThemeToggle } from '@/components/ui/ThemeToggle'
-import { InstallButton } from '@/components/ui/InstallButton'
+import { SiteFooter, SiteHeader } from '@/components/site/SiteChrome'
 // The one code path that starts a résumé and lands in the editor — the same
 // one the gallery card and the landing strip call, so a design started here is
 // a design started there.
 import { useResumeActions } from '@/components/dashboard/newResume'
 import { useSeo } from '@/lib/useSeo'
-import { SITE, breadcrumbJsonLd, isTemplateId, relatedTemplateIds, tagSentence, templatePageMeta } from '@/lib/seoPages'
+import {
+  SITE,
+  breadcrumbJsonLd,
+  imageAlt,
+  isTemplateId,
+  relatedTemplateIds,
+  tagSentence,
+  templatePageImage,
+  templatePageImageHeight,
+  templatePageMeta,
+} from '@/lib/seoPages'
 
-const REPO_URL = 'https://github.com/akhil-dara/cvaurum'
 
 export function TemplatePage() {
   const { id } = useParams<{ id: string }>()
@@ -74,53 +83,13 @@ function Design({ id }: { id: string }) {
     return () => el.remove()
   }, [id])
 
-  const library = useAppStore((s) => s.library)
   const { create } = useResumeActions()
-
-  // The gallery's example résumé, laid out in this design — the same document
-  // every card on /templates shows, so the pages compare like for like.
-  const doc = useMemo<ResumeDocument>(() => {
-    const base = createDocument({ sample: true })
-    return { ...base, metadata: applyTemplateToMetadata(base.metadata, tpl.defaults) }
-  }, [tpl.defaults])
 
   const related = useMemo(() => relatedTemplateIds(id).map((rid) => getTemplate(rid)), [id])
 
   return (
     <div className="min-h-full bg-background">
-      <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-3 sm:px-6">
-          <Logo to="/" />
-          <nav className="hidden items-center gap-6 text-sm text-muted-foreground md:flex">
-            <a className="transition hover:text-foreground" href="/#how">
-              How it works
-            </a>
-            <Link className="font-medium text-foreground transition hover:text-foreground" to="/templates">
-              Templates
-            </Link>
-            <a className="transition hover:text-foreground" href="/#privacy">
-              Privacy
-            </a>
-          </nav>
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            <a
-              className="btn-ghost btn-sm hidden sm:inline-flex"
-              href={REPO_URL}
-              target="_blank"
-              rel="noreferrer"
-              title="View source on GitHub"
-            >
-              <Github className="h-4 w-4" /> GitHub
-            </a>
-            <InstallButton />
-            <ThemeToggle />
-            <Link className={library.length ? 'btn-outline btn-sm' : 'btn-ghost btn-sm'} to="/app">
-              <span className="sm:hidden">Resumes</span>
-              <span className="hidden sm:inline">My resumes{library.length ? ` (${library.length})` : ''}</span>
-            </Link>
-          </div>
-        </div>
-      </header>
+      <SiteHeader current="templates" />
 
       <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -157,21 +126,6 @@ function Design({ id }: { id: string }) {
               Opens the editor with an example résumé in this design — replace the words with your own. Free, no
               account, and everything stays in this browser. Switching designs later keeps your content.
             </p>
-
-            {/* A real image of the design, for the reader and for an image
-                index: the live rendering beside it is a canvas of text a
-                crawler cannot picture. The same file the link preview uses. */}
-            <figure className="mt-6 overflow-hidden rounded-xl border border-border bg-muted">
-              <img
-                src={`/og/${tpl.id}.jpg`}
-                width={1200}
-                height={630}
-                alt={`${tpl.name} résumé template: ${tpl.description}`}
-                className="block h-auto w-full"
-                loading="eager"
-                decoding="async"
-              />
-            </figure>
             <dl className="mt-7 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-border pt-6 text-sm">
               <div>
                 <dt className="text-xs uppercase tracking-wide text-muted-foreground">Layout</dt>
@@ -197,14 +151,30 @@ function Design({ id }: { id: string }) {
           </div>
 
           <div className="order-2 min-w-0 lg:order-1">
-            {/* The sample résumé's own words are not this page's content —
-                keep them out of a search snippet, as the gallery cards do. */}
-            <div
-              data-nosnippet
-              className="aspect-[210/297] w-full overflow-hidden rounded-xl border border-border bg-white shadow-card"
-            >
-              <PreviewThumb doc={doc} width={560} />
-            </div>
+            {/* The design, as the picture the export actually produces.
+
+                The page image, not the share card and not a rendering.
+                /og/<id>.jpg is 1200x630 landscape - the résumé inside it is
+                430x560, with body type about six pixels tall, which is a link
+                preview and not something anyone can read. This is the whole
+                page at 1200px wide, shown at about 560: finer than the
+                rendering that used to sit here, free of the render, and the
+                only thing on the page an image index can picture.
+
+                The height is read rather than assumed: A4 and US Letter give
+                different aspect ratios, so it is recorded per design when the
+                pictures are drawn. */}
+            <figure className="overflow-hidden rounded-xl border border-border bg-white shadow-card">
+              <img
+                src={templatePageImage(tpl.id)}
+                width={PAGE_IMAGE_WIDTH}
+                height={templatePageImageHeight(tpl.id)}
+                alt={imageAlt(tpl)}
+                className="block h-auto w-full"
+                loading="eager"
+                decoding="async"
+              />
+            </figure>
             <p className="mt-2.5 text-center text-[11px] text-muted-foreground">
               Shown on the same example résumé every design in the gallery uses.
             </p>
@@ -238,25 +208,7 @@ function Design({ id }: { id: string }) {
         </section>
       </main>
 
-      <footer className="border-t border-border">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-6 py-8 text-xs text-muted-foreground sm:flex-row">
-          <span className="inline-flex items-center gap-1.5">
-            <Logo compact to="/" /> · Built for everyone job hunting.
-          </span>
-          <span className="inline-flex items-center gap-3">
-            <Link className="transition hover:text-foreground" to="/">
-              Home
-            </Link>
-            <Link className="transition hover:text-foreground" to="/templates">
-              Templates
-            </Link>
-            <a className="transition hover:text-foreground" href={REPO_URL} target="_blank" rel="noreferrer">
-              GitHub
-            </a>
-            <span>100% local · MIT licensed</span>
-          </span>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   )
 }

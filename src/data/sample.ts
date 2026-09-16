@@ -85,8 +85,8 @@ export const SAMPLE_CONTENT: ResumeContent = {
     { id: 's4', name: 'Cloud & DevOps', level: '', keywords: ['AWS', 'Docker', 'Kubernetes', 'Terraform', 'CI/CD'] },
   ],
   languages: [
-    { id: 'l1', language: 'English', fluency: 'Native', rating: 6 },
-    { id: 'l2', language: 'Spanish', fluency: 'Professional', rating: 5 },
+    { id: 'l1', language: 'English', fluency: 'Native', rating: 5 },
+    { id: 'l2', language: 'Spanish', fluency: 'Professional', rating: 4 },
   ],
   interests: [],
   references: [],

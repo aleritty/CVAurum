@@ -85,6 +85,13 @@ function pageHtml(shell: string, site: string, meta: SeoPages.PageMeta, body: st
   html = setMeta(html, 'property', 'og:url', url)
   html = setMeta(html, 'property', 'og:image', image)
   html = setMeta(html, 'property', 'og:image:secure_url', image)
+  // Only ever .jpg or .png reaches here, and it has to stay that way: og:image
+  // is JPEG on purpose. The page images are lossless WebP (under half the bytes
+  // of JPEG q82 for a full résumé page, and bit-exact), but the share-card
+  // consumers do not take it: between them the big link-preview readers
+  // document JPG, PNG and GIF, and one has been measured failing on WebP. A
+  // .webp here would also be announced as image/png, which is worse than the
+  // wrong format: it is a lie about it.
   html = setMeta(html, 'property', 'og:image:type', image.endsWith('.jpg') ? 'image/jpeg' : 'image/png')
   html = setMeta(html, 'property', 'og:image:alt', meta.title)
   html = setMeta(html, 'name', 'twitter:title', meta.title)
@@ -112,8 +119,13 @@ function pageHtml(shell: string, site: string, meta: SeoPages.PageMeta, body: st
   // Same reason for the no-script fallback: it is the landing page's pitch,
   // heading and all, and it would put a second <h1> — the same second <h1> —
   // on every page in the set. Each page now carries its own copy in #root.
+  // Anchored on the <main> inside it, NOT on the first <noscript> in the file:
+  // the head carries a one-line <noscript><style> that hides the boot splash
+  // when scripts are off, and a looser pattern ate that instead, leaving every
+  // generated page with the splash over its content and the landing pitch
+  // underneath.
   html = html.replace(
-    /<noscript>[\s\S]*?<\/noscript>/,
+    /<noscript>\s*<main[\s\S]*?<\/noscript>/,
     `<noscript><p style="max-width:760px;margin:0 auto;padding:24px 20px;font-family:system-ui,sans-serif">CVAurum needs JavaScript to edit and export a résumé. <a href="/">About CVAurum</a> · <a href="/templates">All templates</a></p></noscript>`
   )
   // The shell ships #root empty; fill it for whoever does not run scripts.
@@ -157,12 +169,29 @@ function seoPages(): Plugin {
         fs.writeFileSync(target, text)
       }
 
-      write('templates', pageHtml(shell, seo.SITE, seo.galleryPageMeta(), seo.galleryStaticHtml()))
+      // The gallery declares itself too: what the page is, the trail back up
+      // and an ItemList of the designs. It used to declare nothing at all
+      // while every page inside it declared a breadcrumb and a picture.
+      write('templates', pageHtml(shell, seo.SITE, seo.galleryPageMeta(), seo.galleryStaticHtml(), seo.galleryJsonLd()))
       const ids = seo.allTemplateIds()
       for (const id of ids) {
         write(
           path.join('templates', id),
           pageHtml(shell, seo.SITE, seo.templatePageMeta(id), seo.staticHtml(id), seo.breadcrumbJsonLd(id))
+        )
+      }
+
+      // The example library: the shelf, then one page per sample. These carry
+      // the most content of any page on the site - a whole resume in readable
+      // HTML - which is the only reason a search for "data analyst resume
+      // example" can land anywhere but the homepage.
+      write('examples', pageHtml(shell, seo.SITE, seo.examplesPageMeta(), seo.examplesStaticHtml(), seo.examplesJsonLd()))
+      write('prompts', pageHtml(shell, seo.SITE, seo.promptsPageMeta(), seo.promptsStaticHtml(), seo.promptsJsonLd()))
+      const slugs = seo.orderedSampleSlugs()
+      for (const slug of slugs) {
+        write(
+          path.join('examples', slug),
+          pageHtml(shell, seo.SITE, seo.samplePageMeta(slug), seo.sampleStaticHtml(slug), seo.sampleBreadcrumbJsonLd(slug))
         )
       }
 
@@ -194,6 +223,9 @@ function seoPages(): Plugin {
       writeText('index.md', seo.landingMarkdown())
       writeText('templates.md', seo.galleryMarkdown())
       for (const id of ids) writeText(path.join('templates', `${id}.md`), seo.templateMarkdown(id))
+      writeText('examples.md', seo.examplesMarkdown())
+      writeText('prompts.md', seo.promptsMarkdown())
+      for (const slug of slugs) writeText(path.join('examples', `${slug}.md`), seo.sampleMarkdown(slug))
 
       // Agent discovery, truthful for a site with no server: an API catalog
       // that points at the description, a skill file with its digest, and
@@ -204,12 +236,20 @@ function seoPages(): Plugin {
       writeText(path.join('.well-known', 'agent-skills', 'index.json'), seo.agentSkillsIndex(createHash('sha256').update(skill).digest('hex')))
       writeText('auth.md', seo.authMd())
 
+      // Only the fallback: each <lastmod> is the day THAT page's sources last
+      // changed, recorded in src/data/lastmod.json (scripts/make-lastmod.cjs,
+      // guarded by src/data/lastmod.test.ts). A sitemap that stamped the build
+      // day on all 180 URLs told a crawler every page changed every deploy,
+      // which is how the field stops being read.
       const today = new Date().toISOString().slice(0, 10)
       fs.writeFileSync(path.join(OUT, 'sitemap.xml'), seo.sitemapXml(today))
+      const urls = seo.publicUrlPaths()
+      const dates = new Set(urls.map((u) => seo.lastmodFor(u, today)))
 
       console.log(
         `\nSEO: wrote ${written.length} pre-rendered pages (dist/${written[0]} … dist/${written[written.length - 1]}) ` +
-          `and dist/sitemap.xml with ${ids.length + 2} URLs (lastmod ${today})`
+          `and dist/sitemap.xml with ${urls.length} URLs ` +
+          `(${dates.size} distinct lastmod: ${[...dates].sort().join(', ')})`
       )
     },
   }
@@ -228,6 +268,8 @@ function machineReadersDev(): Plugin {
     '/llms-full.txt': (seo) => seo.llmsFullTxt(),
     '/index.md': (seo) => seo.landingMarkdown(),
     '/templates.md': (seo) => seo.galleryMarkdown(),
+    '/examples.md': (seo) => seo.examplesMarkdown(),
+    '/prompts.md': (seo) => seo.promptsMarkdown(),
     '/auth.md': (seo) => seo.authMd(),
     '/.well-known/api-catalog': (seo) => seo.apiCatalogJson(),
     '/skills/cvaurum/SKILL.md': (seo) => seo.skillMd(),
@@ -289,7 +331,13 @@ export default defineConfig({
         // .icc: the 3KB sRGB profile embedded as every export's PDF/A
         // OutputIntent — precached so an OFFLINE export is still PDF/A
         // (without it the fetch fails and conformance silently drops).
-        globPatterns: ['**/*.{js,mjs,css,html,svg,png,ico,woff,woff2,icc,webp,json}'],
+        // .ttf: only ONE file under /fonts/ is a ttf - the 1.6 KB generated
+        // marks font (scripts/make-marks-font.py), which draws four bullet
+        // glyphs no other bundled family has. Without it in the precache an
+        // offline first visit draws a check or diamond bullet from a system
+        // font, or from nothing. The 158 PDF instances under /fonts-pdf/ are
+        // .ttf too and stay held back by the globIgnore below.
+        globPatterns: ['**/*.{js,mjs,css,html,svg,png,ico,woff,woff2,ttf,icc,webp,json}'],
         // OCR engine assets (tesseract worker/core/traineddata, ~10MB) are only
         // needed when a user imports a scanned PDF — keep them OUT of the precache
         // so first load stays lean; they fetch on demand, same-origin, from /ocr/.
@@ -315,6 +363,33 @@ export default defineConfig({
           '**/semantic.worker-*.js',
           '**/fonts-pdf/*.ttf',
           'templates/*.html',
+          // Same reason as the line above: the pre-rendered per-sample pages
+          // exist for a crawler. The app serves /examples/<slug> from the
+          // shell, so precaching 108 of them bought nothing offline and cost
+          // about four megabytes of first load.
+          'examples/*.html',
+          // The page images: one full-size picture of every design (67 files,
+          // 6.4 MB) and every example (108 files, 10.7 MB). The glob above
+          // sweeps up webp, and every file is far under
+          // maximumFileSizeToCacheInBytes, so without these two lines all 175
+          // of them — 17.1 MB, measured — would install on every first visit,
+          // for pages most visitors never open. They are cached the first time
+          // one is actually looked at instead (runtimeCaching below).
+          //
+          // Same shape as the two ignores above:
+          // DIST-RELATIVE, matching what the build writes (public/img is
+          // copied verbatim to dist/img) — a pattern that matches nothing
+          // fails silently, which is how the 58 template pages shipped in
+          // every install for a while.
+          'img/templates/*.webp',
+          'img/examples/*.webp',
+          // And their 520px grid twins (176 files, 5.9 MB), for the same
+          // reason. A separate line because a `*` does not cross a slash: the
+          // two patterns above match nothing inside thumb/, so without these
+          // the cheap files the grids were given would install on every first
+          // visit — the whole saving, handed back at install time.
+          'img/templates/thumb/*.webp',
+          'img/examples/thumb/*.webp',
           ...nonLatinFontFiles(),
         ],
         // Whatever the precache leaves out of /fonts/ and /fonts-pdf/ (the
@@ -327,13 +402,41 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: { cacheName: 'cvaurum-fonts', expiration: { maxEntries: 400, maxAgeSeconds: 365 * 24 * 3600 } },
           },
-          // The design previews (2.4 MB across 58 files) are far too much to
+          // The pictures of résumés — the page images under /img/ (17.1 MB) and
+          // the share cards under /og/ (about 40 KB each) — are far too much to
           // put in every install, but a page that has been looked at should
           // still show its design with no connection.
+          //
+          // The pattern used to be /\/og\/[^/]+\.jpg$/, which was written when
+          // /og/ held 58 flat files and nothing else existed. [^/]+ cannot
+          // cross a slash, so it matches neither the nested share cards
+          // (/og/examples/<slug>.jpg) nor the page images at all — both would
+          // have been refetched on every visit and missing offline.
+          //
+          // The `.+` crosses slashes, so it also covers the 520px grid twins
+          // under /img/<kind>/thumb/ — the files the three grids actually
+          // load. They are the ones a second visit most wants to find here.
+          //
+          // maxEntries 600: the pattern can match 528 files in total (176 page
+          // images, 176 twins, 176 share cards). Anything smaller is an LRU
+          // ceiling someone can actually hit — 283 would start dropping the
+          // template previews partway through a browse of the 108-example
+          // library, which is exactly the case this cache exists for, and 400
+          // (the bound before the twins existed) is now inside the reachable
+          // set. 600 means eviction by count never happens; the bound is only a
+          // guard against unbounded growth, the same one the font cache uses.
+          // Worst case is ~30 MB, and only for someone who has opened every
+          // picture on the site at full size.
           {
-            urlPattern: /\/og\/[^/]+\.jpg$/,
+            urlPattern: /\/(img|og)\/.+\.(webp|jpg)$/,
             handler: 'CacheFirst',
-            options: { cacheName: 'cvaurum-previews', expiration: { maxEntries: 80, maxAgeSeconds: 365 * 24 * 3600 } },
+            // Thirty days, not a year. These URLs carry a design's id or a
+            // sample's slug, never a hash of the bytes, so the same URL does
+            // serve a different picture after one is redrawn - and a year of
+            // CacheFirst would have kept the seven designs whose pictures were
+            // taken while the renderer was dropping its glyphs on returning
+            // visitors' machines until 2027.
+            options: { cacheName: 'cvaurum-previews', expiration: { maxEntries: 600, maxAgeSeconds: 30 * 24 * 3600 } },
           },
           // The opt-in semantic model (34 MB) is downloaded only by someone
           // who turns it on; keeping what they downloaded is what makes the
@@ -373,12 +476,6 @@ export default defineConfig({
   server: {
     port: 5173,
     open: false,
-    watch: {
-      // Some Linux desktop sessions exhaust the shared inotify pool before Vite starts.
-      // Polling keeps development usable without requiring machine-wide sysctl changes.
-      usePolling: true,
-      interval: 1000,
-    },
   },
   build: {
     target: 'es2021',

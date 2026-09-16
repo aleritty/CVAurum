@@ -2303,7 +2303,8 @@ function Languages({
   // In the footer strip only the row form renders.
   if (compact) return <LanguagesCompact doc={doc} edit={edit} prof={prof} />
   return (
-    <>
+    // .rm-levels lines every meter up in one column; see artboard.css.
+    <div className="rm-levels">
       {doc.content.languages.map((l, i) => {
         if (!edit && !anyText(l.language)) return null
         return (
@@ -2354,7 +2355,7 @@ function Languages({
           </div>
         )
       })}
-    </>
+    </div>
   )
 }
 

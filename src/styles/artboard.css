@@ -1528,6 +1528,49 @@
   font-size: calc(var(--rm-fs) * 0.92);
 }
 
+/* Languages list: every row's meter lands in one shared column, instead of
+   each meter sitting flush after its own label (a short "EN" and a long
+   "Portuguese" put their dots at completely different x-offsets).
+
+   Grid + subgrid rather than a fixed or percentage label width: a fixed floor
+   is what an earlier version of this row tried (min-width 40/45% in JS) and it
+   had to be ripped out - combined with the sidebar's overflow-wrap:break-word,
+   shrinking a label below that floor sliced a word in half ("Portuguese" ->
+   "Portugue"/"se"), corrupting the PDF's text extraction.
+
+   Column 1 is minmax(0, max-content), NOT bare max-content: a bare max-content
+   track cannot shrink below the widest label's unwrapped width, and in a narrow
+   .rm-col-aside that is often wider than the whole column - the row then
+   overflowed the sidebar box (which sets no overflow:hidden) and dragged the
+   no-meter row's right-aligned fluency text off past the printable edge with
+   it. minmax(0, ...) lets column 1 shrink under pressure, and the label wraps
+   on whole words instead (.rm-mini-title's word-break stays normal, so it still
+   cannot corrupt into a split word). */
+.rm-levels {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  column-gap: 8px;
+  row-gap: var(--rm-item-gap-mini, var(--rm-item-gap));
+}
+/* .rm-mini keeps its own box - it is the positioned ancestor the absolute move
+   and delete handles anchor to - but hands its two column tracks down from
+   .rm-levels so every row lines up. The row gap above replaces its margin. */
+.rm-levels > .rm-mini {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+/* Unwrap .rm-level itself: its two children (label, meter) become the actual
+   subgrid cells instead of a nested flex row the subgrid cannot see into. */
+.rm-levels > .rm-mini > .rm-level {
+  display: contents;
+}
+/* A row with no meter is one cell spanning both tracks, as it was. */
+.rm-levels > .rm-mini > .rm-item-head {
+  grid-column: 1 / -1;
+}
+
 /* aside variant: lighten rules/headers against dark sidebar */
 .rm-col-aside .rm-section-title {
   color: inherit;

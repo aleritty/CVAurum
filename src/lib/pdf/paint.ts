@@ -1931,6 +1931,10 @@ export function assignOpsToPages(
   const pageCount = cutsPx.length + 1
   const bandTops = [0, ...cutsPx]
   const pages: DrawOp[][] = Array.from({ length: pageCount }, () => [])
+  // Chrome copies are collected here, per page, in ENCOUNTER order, and
+  // prepended to each page once at the end — never pushed into `pages`
+  // directly at iteration time. See the loop's own chrome branch for why.
+  const chromePrefixes: DrawOp[][] = Array.from({ length: pageCount }, () => [])
 
   const pushToBand = (op: DrawOp, pageIndex: number) => {
     const offsetPx = pageIndex === 0 ? 0 : bandTops[pageIndex] - pageTopPaddingPx
@@ -1941,10 +1945,26 @@ export function assignOpsToPages(
     // The tag alone is not enough to earn the full-bleed repeat — the op has
     // to start at the document's top as well. See `isDocumentGround`.
     if (op.pageChrome && isDocumentGround(op)) {
-      // Page i shows document y starting at its own band top (page 1 starts
-      // at 0); that offset is what keeps a chrome gradient continuous.
-      pages.forEach((pageOps, i) =>
-        pageOps.push(clampChromeOpToPage(op, pageHeightPx, i === 0 ? 0 : bandTops[i] - pageTopPaddingPx))
+      // Page-chrome is the page's own backdrop, so it must land BEFORE every
+      // real op on that page — never merely "wherever this op's turn came up
+      // in the walk". A two-column document walks main fully before aside,
+      // so an aside band's chrome copy is reached only after all of main's
+      // ops are already in `pages`; pushed there directly it would land
+      // AFTER that page's main content, and — the finding that flagged
+      // this — sidebarFirstOnContinuationPages (readingOrder.ts) can also
+      // relocate a continuation page's aside TEXT to the very front of the
+      // page, ahead of the chrome copy that's supposed to sit under it,
+      // painting the aside's own opaque backdrop over its own just-moved
+      // text (measured: a multi-page two-column export with a light aside
+      // column came back with every sidebar line on every page but the
+      // first invisible, extractable text with no ink). Collecting copies
+      // separately and prepending them after the loop — in the same
+      // relative order they were encountered, so a root background still
+      // sits under a column band drawn over it — guarantees chrome is
+      // first on every page regardless of when the walk reaches it or how
+      // a later pass reorders that page's real content.
+      pages.forEach((_, i) =>
+        chromePrefixes[i].push(clampChromeOpToPage(op, pageHeightPx, i === 0 ? 0 : bandTops[i] - pageTopPaddingPx))
       )
       continue
     }
@@ -1970,7 +1990,7 @@ export function assignOpsToPages(
     pushToBand(op, pageIndex)
   }
 
-  return pages
+  return pages.map((pageOps, i) => [...chromePrefixes[i], ...pageOps])
 }
 
 /**

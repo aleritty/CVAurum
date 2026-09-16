@@ -19,6 +19,7 @@ import { fitLineHeight } from '@/lib/fitOnePage'
 
 const FIT_AS_SET: FitVector = { type: 1, space: 1 }
 import { applyKeywordFit, fitHeadingWords, refitWhenFontsReady } from '@/lib/pdf/keywordFit'
+import { alignAsideVisualToMain } from './asideVisualAlign'
 import { SectionBody } from './sections'
 import { CONTACT_ICON_CHOICES, ContactIcons, contactIcon, prettyUrl, cleanEmail, Deco } from './atoms'
 import { Ed, type EditFn, type MetaEditFn } from './Editable'
@@ -1268,6 +1269,9 @@ export function Artboard({
     // else, but it must be settled before keywords are measured against it.
     fitHeadingWords(rootRef.current)
     applyKeywordFit(rootRef.current)
+    // Last: the aside's photo/monogram gap depends on where the settled
+    // header and headings actually landed.
+    alignAsideVisualToMain(rootRef.current)
   })
   // ...and again once the document's own faces have actually loaded. The pass
   // above fires with whatever the browser had at the time, which for a
@@ -1280,7 +1284,8 @@ export function Artboard({
   const { fontFamily, headingFamily, nameFamily } = doc.metadata.typography
   useEffect(() => {
     if (!rootRef.current) return
-    return refitWhenFontsReady(rootRef.current, [fontFamily, headingFamily, nameFamily])
+    const root = rootRef.current
+    return refitWhenFontsReady(root, [fontFamily, headingFamily, nameFamily], () => alignAsideVisualToMain(root))
   }, [fontFamily, headingFamily, nameFamily])
 
   return (

@@ -229,7 +229,11 @@ export function fitHeadingWords(root: HTMLElement): void {
  * Both passes are idempotent, so calling this after every family change costs
  * nothing when the face was already loaded.
  */
-export function refitWhenFontsReady(root: HTMLElement, families: (string | undefined)[]): () => void {
+export function refitWhenFontsReady(
+  root: HTMLElement,
+  families: (string | undefined)[],
+  afterRefit?: () => void
+): () => void {
   let cancelled = false
   void ensureFontsReady(families).then(() => {
     if (cancelled) return
@@ -238,6 +242,10 @@ export function refitWhenFontsReady(root: HTMLElement, families: (string | undef
     // measured against it (same order as the layout effect's own pass).
     fitHeadingWords(root)
     applyKeywordFit(root)
+    // Anything else that measures this tree (e.g. Artboard's aside-photo
+    // alignment) needs to re-measure here too: the fallback face this ran
+    // against a moment ago carried different metrics than the real one.
+    afterRefit?.()
   })
   return () => {
     cancelled = true

@@ -701,6 +701,7 @@ function ItemFields({
           <RatingField
             label="Level (optional)"
             value={item.rating}
+            max={6}
             onChange={(v) =>
               patch((it) => {
                 it.rating = v || undefined

@@ -624,7 +624,7 @@ export function DesignPanel({ doc }: { doc: ResumeDocument }) {
             }
           />
           <p className="-mt-1 text-[11px] text-muted-foreground">
-            How the 0–5 rating on skills &amp; languages is shown.
+            How the 0–5 rating on skills (0–6 for languages) is shown.
           </p>
         </div>
       </FieldGroup>

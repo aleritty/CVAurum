@@ -188,8 +188,8 @@ export const LanguageSchema = z.object({
   id: z.string().optional(),
   language: z.string().optional().default(''),
   fluency: z.string().optional().default(''),
-  /** 0-5 for visual meters (CVAurum extension) */
-  rating: z.number().min(0).max(5).optional().catch(undefined),
+  /** 0-6 for visual meters: the CEFR ladder is A1-C2, six rungs. */
+  rating: z.number().min(0).max(6).optional().catch(undefined),
 })
 
 export const InterestSchema = z.object({

@@ -270,12 +270,13 @@ function singleDate(
 
 type ProfStyle = 'dots' | 'bars' | 'stars' | 'text' | 'none'
 
-/** Render a 0–5 rating as the chosen meter (only for meter styles). */
-function Proficiency({ rating, style }: { rating?: number; style: ProfStyle }) {
+/** Render a 0–max rating as the chosen meter (only for meter styles).
+ *  Skills run 0–5; languages run 0–6, one rung per CEFR level. */
+function Proficiency({ rating, style, max = 5 }: { rating?: number; style: ProfStyle; max?: number }) {
   if (rating == null) return null
-  if (style === 'stars') return <Stars value={rating} />
-  if (style === 'bars') return <LevelBar value={rating} />
-  return <Dots value={rating} />
+  if (style === 'stars') return <Stars value={rating} max={max} />
+  if (style === 'bars') return <LevelBar value={rating} max={max} />
+  return <Dots value={rating} max={max} />
 }
 
 /** A 0-5 level as the whole number a ring shows in its centre. */
@@ -2322,7 +2323,7 @@ function Languages({
                 ) : (
                   <span className="rm-mini-title">{l.language}</span>
                 )}
-                <Proficiency rating={l.rating} style={prof} />
+                <Proficiency rating={l.rating} style={prof} max={6} />
               </div>
             ) : (
               <div className="rm-item-head">

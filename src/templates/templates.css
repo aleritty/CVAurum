@@ -886,6 +886,16 @@
   font-weight: 600;
   color: var(--rm-headline-color, var(--rm-primary));
 }
+/* Contacts read as text until pointed at: the underline and the accent are
+   the hover, not the resting state, so the header line stays even. */
+.tpl-clarity .rm-contacts a {
+  color: inherit;
+  text-decoration: none;
+}
+.tpl-clarity .rm-contacts a:hover {
+  color: var(--rm-contact-color, var(--rm-primary));
+  text-decoration: underline;
+}
 /* heavy, confident section rule */
 .tpl-clarity .rm-section-title {
   font-weight: var(--rm-heading-weight, 700);

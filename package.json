@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "CVAurum — the open-source resume studio. Beautiful, ATS-ready resumes, 100% local and private. No account, no server, no tracking.",
+  "description": "CVAurum \u2014 the open-source resume studio. Beautiful, ATS-ready resumes, 100% local and private. No account, no server, no tracking.",
   "license": "MIT",
   "author": "akhil-dara",
   "homepage": "https://github.com/akhil-dara/cvaurum#readme",
@@ -99,5 +99,14 @@
   },
   "engines": {
     "node": ">=18.18.0"
+  },
+  "allowScripts": {
+    "@swc/core@1.15.41": true,
+    "canvas@2.11.2": true,
+    "esbuild@0.21.5": true,
+    "esbuild@0.28.2": true,
+    "protobufjs@6.11.6": true,
+    "sharp@0.32.6": true,
+    "tesseract.js@5.1.1": true
   }
 }

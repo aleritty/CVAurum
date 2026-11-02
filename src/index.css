@@ -123,6 +123,26 @@
 
 /* ============================================================== components */
 @layer components {
+  /* SkipLink: off-screen until a keyboard reaches it, then a plain chip at
+     the top-left above everything (the editor's top bar is z-40). */
+  .skip-link {
+    position: fixed;
+    left: 12px;
+    top: -48px;
+    z-index: 100;
+    border-radius: 8px;
+    background: hsl(var(--foreground));
+    color: hsl(var(--background));
+    padding: 8px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    transition: top 0.15s ease-out;
+  }
+  .skip-link:focus-visible {
+    top: 12px;
+    outline: 2px solid hsl(var(--primary));
+    outline-offset: 2px;
+  }
   .btn {
     @apply inline-flex select-none items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium
       transition-all duration-150 disabled:pointer-events-none disabled:opacity-50;
@@ -155,7 +175,7 @@
 
   .input {
     @apply flex h-9 w-full rounded-md border border-input bg-surface px-3 py-1 text-sm text-foreground
-      shadow-soft transition-colors placeholder:text-muted-foreground/70
+      shadow-soft transition-colors placeholder:text-muted-foreground
       focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:border-ring;
   }
   .textarea {
@@ -360,4 +380,13 @@
   @media (prefers-reduced-motion: reduce) {
     .land-reveal { animation: none; }
   }
+}
+
+/* The homepage's display voice: the face of Folio Noir, a Signature design,
+   so the site is typeset like the résumés it makes. Headings only; text
+   stays in the interface face. */
+.font-display {
+  font-family: 'Cormorant Garamond', Georgia, serif;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
 }

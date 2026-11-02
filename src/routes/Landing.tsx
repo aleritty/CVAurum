@@ -3,26 +3,12 @@
  * what it is, how it works, why it's private — with clear ways in. The actual
  * resume library/dashboard lives at /app.
  */
+import { SkipLink } from '@/components/ui/SkipLink'
 import { CreateButton, HeaderThemeToggle, PhoneResumesLink } from '@/components/site/HeaderActions'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AnimatePresence, motion, useInView, useMotionValue, useSpring, useTransform, useReducedMotion } from 'framer-motion'
-import {
-  FileText,
-  Plus,
-  FileUp,
-  ShieldCheck,
-  Target,
-  FileDown,
-  WifiOff,
-  ArrowRight,
-  LayoutGrid,
-  PencilLine,
-  Download,
-  Github,
-  Check,
-  Minus,
-} from 'lucide-react'
+import { AnimatePresence, motion, useInView, useReducedMotion } from 'framer-motion'
+import { FileText, Plus, FileUp, ShieldCheck, ArrowRight, Github, Check, Minus } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { createDocument } from '@/data/defaults'
 import type { ResumeDocument } from '@/types/document'
@@ -39,12 +25,6 @@ import { InstallButton } from '@/components/ui/InstallButton'
 import { useTitle } from '@/lib/useTitle'
 
 const GOLD = 'linear-gradient(135deg,#8a5a12,#d4982f,#f7d774)'
-const goldText = {
-  backgroundImage: GOLD,
-  WebkitBackgroundClip: 'text',
-  backgroundClip: 'text',
-  color: 'transparent',
-} as const
 const REPO_URL = 'https://github.com/akhil-dara/cvaurum'
 
 /** Templates shown live (with sample content) in the showcase strip. */
@@ -111,6 +91,7 @@ export function Landing() {
         onChange={(e) => importPdf(e.target.files?.[0])}
       />
 
+      <SkipLink />
       {/* nav — ink glass over the hero, theme glass past it */}
       <header
         className={`sticky top-0 z-30 border-b transition-colors duration-300 ${overHero ? '' : 'backdrop-blur '}${
@@ -122,9 +103,14 @@ export function Landing() {
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-3 sm:px-6">
           <Logo to="/" />
           <nav
-            className={`hidden items-center gap-6 text-sm md:flex ${overHero ? 'text-white/60' : 'text-muted-foreground'}`}
+            className={`hidden items-center gap-5 whitespace-nowrap text-sm md:flex lg:gap-6 ${overHero ? 'text-white/60' : 'text-muted-foreground'}`}
           >
-            <a href="#how" className={`transition ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
+            {/* The site chrome's rule (SiteChrome.tsx): md carries the pages,
+                and the in-page anchors come back once there is room (xl here:
+                this header also carries GitHub, the theme and My resumes). At 768px this row held
+                five links, wrapped "How it works" onto three lines and pushed
+                the Create button off the edge (831px of page in 768). */}
+            <a href="#how" className={`hidden transition xl:inline ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
               How it works
             </a>
             <Link to="/templates" className={`transition ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
@@ -133,10 +119,15 @@ export function Landing() {
             <Link to="/examples" className={`transition ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
               Examples
             </Link>
-            <a href="#compare" className={`hidden transition lg:inline ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
+            {/* every other page's header offers it (SiteChrome.tsx); this one
+                built its own and left it out */}
+            <Link to="/prompts" className={`transition ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
+              Prompts
+            </Link>
+            <a href="#compare" className={`hidden transition xl:inline ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
               Compare
             </a>
-            <a href="#privacy" className={`transition ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
+            <a href="#privacy" className={`hidden transition xl:inline ${overHero ? 'hover:text-white' : 'hover:text-foreground'}`}>
               Privacy
             </a>
           </nav>
@@ -170,7 +161,7 @@ export function Landing() {
       <main>
         {/* hero — the cinematic stage */}
         <HeroCinema
-          onCreate={() => setChooser(true)}
+          onCreate={() => create(false)}
           onSample={() => setSampleOpen(true)}
           onImportPdf={() => pdfRef.current?.click()}
           covered={chooser || sampleOpen}
@@ -180,31 +171,28 @@ export function Landing() {
         <section id="how" className="border-y border-border bg-surface-muted/40">
           <div className="mx-auto max-w-6xl px-6 py-14 land-reveal">
             <div className="text-center">
-              <h2 className="text-2xl font-semibold tracking-tight">Three steps to a polished résumé</h2>
+              <h2 className="font-display text-3xl font-semibold sm:text-4xl">Three steps to a polished résumé</h2>
               <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
                 No sign-up, no setup. Everything happens right here in your browser.
               </p>
             </div>
-            <div className="mt-10 grid gap-6 sm:grid-cols-3">
+            <ol className="mt-10 grid gap-x-10 gap-y-8 sm:grid-cols-3">
               <Step
                 n={1}
-                icon={<LayoutGrid className="h-5 w-5" />}
                 title="Pick a template"
                 body={`Choose from ${TEMPLATE_COUNT} recruiter-ready designs. Switch anytime — your content carries over.`}
               />
               <Step
                 n={2}
-                icon={<PencilLine className="h-5 w-5" />}
                 title="Fill it in"
                 body="Edit right on the page. A live ATS score and keyword match keep you on track."
               />
               <Step
                 n={3}
-                icon={<Download className="h-5 w-5" />}
                 title="Export & apply"
                 body="Download a crisp, selectable PDF or an ATS-friendly Word file in one click."
               />
-            </div>
+            </ol>
           </div>
         </section>
 
@@ -241,7 +229,7 @@ export function Landing() {
         <section id="templates" className="relative mx-auto max-w-6xl px-6 py-14 land-reveal">
           <div className="mb-6 flex items-end justify-between">
             <div>
-              <h2 className="text-xl font-semibold tracking-tight">Start from a recruiter-ready template</h2>
+              <h2 className="font-display text-3xl font-semibold sm:text-4xl">Start from a recruiter-ready template</h2>
               <p className="mt-1 text-sm text-muted-foreground">
                 Click any design to start editing — switch anytime, your content stays. Not sure what to write?{' '}
                 <Link className="text-primary underline-offset-2 hover:underline" to="/examples">
@@ -280,37 +268,63 @@ export function Landing() {
         </section>
         </div>
 
-        {/* feature band */}
-        <section className="border-y border-border bg-surface-muted/40">
-          <div className="mx-auto grid max-w-6xl gap-6 px-6 py-12 sm:grid-cols-2 lg:grid-cols-4 land-reveal">
-            <Feature
-              icon={<ShieldCheck className="h-5 w-5" />}
-              title="Private by architecture"
-              body="No server, no account, no tracking. Your data lives only in this browser."
-            />
-            <Feature
-              icon={<Target className="h-5 w-5" />}
-              title="ATS built in"
-              body="A live, deterministic ATS score and job-description keyword matching."
-            />
-            <Feature
-              icon={<FileDown className="h-5 w-5" />}
-              title="PDF & Word export"
-              body="Pixel-perfect PDF plus a clean, ATS-friendly .docx — generated in-browser."
-            />
-            <Feature
-              icon={<WifiOff className="h-5 w-5" />}
-              title="Works offline"
-              body="Installable, with all fonts bundled. Zero external requests, ever."
-            />
+        {/* The proof: what makes the file different, shown on a real page.
+            It replaces four icon tiles (private, ATS, export, offline) that
+            any app could have printed; every fact here is measured on every
+            design by the export gates. */}
+        <section className="border-y border-border bg-surface-muted/40" aria-labelledby="proof-title">
+          <div className="mx-auto grid max-w-6xl items-center gap-12 px-6 py-16 lg:grid-cols-[minmax(0,22rem)_1fr] land-reveal">
+            <figure className="mx-auto w-full max-w-[22rem]">
+              <img
+                src="/img/templates/keystone.webp"
+                alt="A page exported from the Keystone design"
+                width={1200}
+                height={1697}
+                loading="lazy"
+                decoding="async"
+                className="w-full rounded-sm border border-border bg-white shadow-[0_18px_40px_-24px_rgba(15,17,25,0.45)]"
+              />
+              <figcaption className="mt-3 text-center text-xs text-muted-foreground">
+                A page as it exports: Keystone, one of the Signature designs.
+              </figcaption>
+            </figure>
+            <div>
+              <h2
+                id="proof-title"
+                className="font-display text-4xl font-semibold leading-tight sm:text-5xl"
+               
+              >
+                The PDF is made the way print is.
+              </h2>
+              <p className="mt-3 max-w-xl text-base leading-relaxed text-muted-foreground">
+                Not a picture of a web page: every export is drawn as type and lines, and every design is checked for all three below, release after release.
+              </p>
+              <dl className="mt-8 divide-y divide-border border-y border-border">
+                {[
+                  ['Real text', 'Every word is selectable and searchable, and the text an ATS reads is the text you wrote, checked word for word on every design.'],
+                  ['About 60 KB', 'A one-page résumé weighs about as much as a short email: drawn in vectors, with only the letters it uses embedded.'],
+                  ['Accessible and archive-ready', 'Exports follow PDF/UA, the standard screen readers rely on, and PDF/A, the one archives keep.'],
+                ].map(([term, body]) => (
+                  <div key={term} className="grid gap-1 py-4 sm:grid-cols-[15rem_1fr] sm:gap-6">
+                    <dt
+                      className="font-display text-xl font-semibold"
+                     
+                    >
+                      {term}
+                    </dt>
+                    <dd className="text-sm leading-relaxed text-muted-foreground">{body}</dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
           </div>
         </section>
 
         {/* comparison */}
         <section id="compare" className="mx-auto max-w-5xl px-6 py-14 land-reveal">
           <div className="text-center">
-            <h2 className="text-2xl font-semibold tracking-tight">
-              Most builders win one thing. CVAurum wins them all.
+            <h2 className="font-display text-3xl font-semibold sm:text-4xl">
+              How it compares, honestly
             </h2>
             <p className="mx-auto mt-2 max-w-2xl text-sm text-muted-foreground">
               Privacy, or open source, or design, or ATS, or offline — most tools pick one. Here's the honest
@@ -327,7 +341,7 @@ export function Landing() {
                 <p className="mt-3 flex gap-2 text-sm">
                   <Check className="mt-0.5 h-4 w-4 shrink-0 text-success" />
                   <span>
-                    <span className="font-semibold" style={goldText}>
+                    <span className="font-semibold text-primary">
                       CVAurum
                     </span>{' '}
                     — {r.cvaurum}
@@ -347,7 +361,7 @@ export function Landing() {
               <thead>
                 <tr className="bg-surface-muted/50 text-left">
                   <th className="px-4 py-3 font-medium text-muted-foreground"> </th>
-                  <th className="px-4 py-3 font-bold" style={goldText}>
+                  <th className="px-4 py-3 font-bold text-primary">
                     CVAurum
                   </th>
                   <th className="px-4 py-3 font-medium text-muted-foreground">Most builders</th>
@@ -371,44 +385,66 @@ export function Landing() {
           </div>
         </section>
 
-        {/* privacy callout */}
+        {/* privacy: set as a statement, not a card. The call to start lives
+            once, at the foot of the page; here the only link is the proof. */}
         <section id="privacy" className="mx-auto max-w-6xl px-6 py-16 land-reveal">
-          <div className="overflow-hidden rounded-2xl border border-border bg-surface p-8 shadow-[0_0_90px_-30px_rgba(212,152,47,0.4)] sm:p-12">
-            <div className="grid items-center gap-8 md:grid-cols-[auto,1fr]">
-              <div
-                className="flex h-16 w-16 items-center justify-center rounded-2xl text-white"
-                style={{ background: GOLD }}
+          <div className="grid gap-8 border-t border-border pt-10 md:grid-cols-[minmax(0,5fr),minmax(0,6fr)] md:gap-16">
+            <h2 className="font-display text-3xl font-semibold leading-tight sm:text-4xl">
+              Your résumé never leaves your device
+            </h2>
+            <div className="max-w-xl text-[15px] leading-relaxed text-muted-foreground">
+              <p>
+                Most online builders upload your career history to their servers. CVAurum doesn't have a server.
+                Your content, your photo and your exports are made and kept in your browser.
+              </p>
+              <p className="mt-3">
+                A backup file holds every résumé and restores them anywhere. The code is open, so you can check all of
+                this yourself.
+              </p>
+              <a
+                className="mt-5 inline-flex items-center gap-2 text-sm font-medium text-foreground underline decoration-border underline-offset-4 transition hover:decoration-foreground"
+                href={REPO_URL}
+                target="_blank"
+                rel="noreferrer"
               >
-                <ShieldCheck className="h-8 w-8" />
-              </div>
-              <div>
-                <h2 className="text-2xl font-semibold tracking-tight">Your résumé never leaves your device</h2>
-                <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-                  Most online builders upload your career history to their servers. CVAurum doesn't have a server.
-                  Everything — your content, your photo, your exports — is created and stored locally in your browser.
-                  You can back it all up to a single file and restore it anywhere. It's open source, so you can verify
-                  exactly that.
-                </p>
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <button className="btn-primary btn-sm" onClick={() => setChooser(true)}>
-                    <Plus className="h-4 w-4" /> Create my resume
-                  </button>
-                  <a className="btn-outline btn-sm" href={REPO_URL} target="_blank" rel="noreferrer">
-                    <Github className="h-4 w-4" /> View the source
-                  </a>
-                </div>
-              </div>
+                <Github className="h-4 w-4" /> Read the source
+              </a>
             </div>
           </div>
         </section>
 
         {/* faq */}
         <section id="faq" className="mx-auto max-w-3xl px-6 pb-16 land-reveal">
-          <h2 className="text-center text-xl font-semibold tracking-tight">Questions</h2>
-          <div className="mt-6 space-y-3">
+          <h2 className="font-display text-center text-3xl font-semibold sm:text-4xl">Questions</h2>
+          <div className="mt-8 divide-y divide-border border-y border-border">
             {SITE.faq.map((f) => (
               <Faq key={f.q} q={f.q} a={f.a} />
             ))}
+          </div>
+        </section>
+
+        {/* The last thing on the page is the first thing it asks: the call
+            to start used to end 1,500px back, at the privacy box. */}
+        <section className="border-t border-border" aria-labelledby="closing-title">
+          <div className="mx-auto max-w-3xl px-6 py-16 text-center">
+            <h2
+              id="closing-title"
+              className="font-display text-4xl font-semibold sm:text-5xl"
+             
+            >
+              Start yours. It stays here.
+            </h2>
+            <p className="mx-auto mt-3 max-w-md text-sm text-muted-foreground">
+              No account, no upload, nothing to pay. Your résumé is saved in this browser as you type.
+            </p>
+            <div className="mt-7 flex flex-wrap justify-center gap-3">
+              <button className="btn-primary" onClick={() => create(false)}>
+                <Plus className="h-4 w-4" /> Create my resume
+              </button>
+              <button className="btn-outline" onClick={() => setSampleOpen(true)}>
+                <FileText className="h-4 w-4" /> Start with an example
+              </button>
+            </div>
           </div>
         </section>
       </main>
@@ -424,6 +460,9 @@ export function Landing() {
             </Link>
             <Link className="transition hover:text-foreground" to="/examples">
               Examples
+            </Link>
+            <Link className="transition hover:text-foreground" to="/prompts">
+              Prompts
             </Link>
             <a className="transition hover:text-foreground" href={REPO_URL} target="_blank" rel="noreferrer">
               GitHub
@@ -467,35 +506,59 @@ export function Landing() {
   )
 }
 
-function Step({ n, icon, title, body }: { n: number; icon: React.ReactNode; title: string; body: string }) {
+/** One step on a hairline rule, numbered in the display face: the order is
+ *  the point, so the numeral leads and nothing is boxed. */
+function Step({ n, title, body }: { n: number; title: string; body: string }) {
   return (
-    <div className="relative rounded-2xl border border-border bg-background p-6">
-      <span className="absolute right-5 top-5 text-3xl font-bold text-muted-foreground/15">{n}</span>
-      <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">{icon}</div>
-      <h3 className="mt-4 text-base font-semibold">{title}</h3>
-      <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{body}</p>
-    </div>
+    <li className="border-t border-foreground/20 pt-4">
+      <div className="flex items-baseline gap-3">
+        <span className="font-display text-4xl font-semibold leading-none text-primary [font-variant-numeric:lining-nums]" aria-hidden="true">
+          {n}
+        </span>
+        <h3 className="text-base font-semibold">{title}</h3>
+      </div>
+      <p className="mt-2 max-w-xs text-sm leading-relaxed text-muted-foreground">{body}</p>
+    </li>
   )
 }
 
-function Feature({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
+/**
+ * The hero reel's pages, stacked so a change of design never flickers.
+ *
+ * Each tick used to mount a fresh full-resume render and fade it in while the
+ * old one faded out: the new page painted its first frames mid-fade, both
+ * layers sat near half opacity at the crossing (the stage showed through),
+ * and the card behind swapped with no fade at all. Now the previous, current
+ * and next pages stay mounted; the next one is already laid out, invisible,
+ * before its turn, so a tick only fades it in ON TOP of a page that stays
+ * fully opaque beneath it.
+ */
+function ReelPages({ items, index, width }: { items: { id: string; doc: ResumeDocument }[]; index: number; width: number }) {
+  const n = items.length
+  const layers = [(index - 1 + n) % n, index, (index + 1) % n]
   return (
-    <div>
-      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">{icon}</div>
-      <h3 className="mt-3 text-sm font-semibold">{title}</h3>
-      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{body}</p>
-    </div>
+    <>
+      {layers.map((i, slot) => (
+        <div
+          key={items[i].id}
+          className="absolute inset-0 bg-white transition-opacity duration-500 ease-out"
+          style={{ opacity: slot === 2 ? 0 : 1, zIndex: slot === 1 ? 2 : slot === 0 ? 1 : 0 }}
+        >
+          <PreviewThumb doc={items[i].doc} width={width} />
+        </div>
+      ))}
+    </>
   )
 }
 
 function Faq({ q, a }: { q: string; a: string }) {
   return (
-    <details className="group rounded-xl border border-border bg-surface px-5 py-4">
-      <summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium">
+    <details className="group py-1">
+      <summary className="flex min-h-[48px] cursor-pointer list-none items-center justify-between gap-4 py-3 text-[15px] font-medium marker:hidden [&::-webkit-details-marker]:hidden">
         {q}
-        <span className="ml-4 text-muted-foreground transition group-open:rotate-45">+</span>
+        <span aria-hidden className="shrink-0 text-lg leading-none text-muted-foreground transition group-open:rotate-45">+</span>
       </summary>
-      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{a}</p>
+      <p className="max-w-2xl pb-4 text-sm leading-relaxed text-muted-foreground">{a}</p>
     </details>
   )
 }
@@ -521,13 +584,10 @@ function HeroCinema({
   covered: boolean
 }) {
   const reduce = useReducedMotion()
-  // The aurora kept drifting long after the reader scrolled past it - three
-  // infinite animations writing styles every frame under a whole page that no
-  // longer showed them. They run only while the hero is actually on screen.
+  // The backdrop loop and the reel run only while the hero is on screen.
   const heroRef = useRef<HTMLElement | null>(null)
   const heroInView = useInView(heroRef, { amount: 0.05 })
   const onScreen = !reduce && heroInView
-  const drift = onScreen && !covered
   // The morph reel: identical sample content flowing through contrasting
   // designs — the template engine demonstrating itself.
   // Some frames also show a choice the page offers on top of any design - a
@@ -537,14 +597,19 @@ function HeroCinema({
   const morph = useMemo(
     () =>
       (
+        // It opens on the Signature designs - the ones nothing else has -
+        // then shows the choices any design takes on top. A light page leads:
+        // the hero is dark, and a dark page first read as an empty stage.
         [
+          ['broadsheet', 'Signature', null],
+          ['measure', 'typeset to a baseline', null],
+          ['marquee', 'Signature', null],
+          ['folio-noir', 'Signature', null],
           ['clarity', 'labelled contacts', (m) => void (m.layout.contactStyle = 'strip')],
-          ['obsidian', '', null],
           ['sapphire', 'contact pills', (m) => void (m.layout.contactStyle = 'pills')],
           ['crest', 'headings on a rail', (m) => void (m.layout.headingPlacement = 'side')],
+          ['keystone', 'Signature', null],
           ['halcyon', 'dates in the company line', (m) => void (m.layout.dateAlign = 'inline')],
-          ['pinnacle', 'contacts beside the name', (m) => void (m.layout.contactPlacement = 'beside')],
-          ['marquee', '', null],
         ] as [string, string, ((m: ResumeDocument['metadata']) => void) | null][]
       ).map(([id, note, tweak]) => {
         const d = createDocument({ sample: true })
@@ -556,32 +621,16 @@ function HeroCinema({
   )
   const [ti, setTi] = useState(0)
   useEffect(() => {
-    // The crossfade mounted a fresh full-resume render every 3.4 seconds
+    // The crossfade mounted a fresh full-resume render every few seconds
     // FOREVER - scrolled past, tab hidden, it kept spending a frame budget
     // nobody was watching. It ticks only while the hero is on screen and the
     // tab is visible.
     if (reduce || !heroInView || covered) return
     const t = setInterval(() => {
       if (!document.hidden) setTi((i) => (i + 1) % morph.length)
-    }, 3400)
+    }, 5500)
     return () => clearInterval(t)
   }, [reduce, morph.length, heroInView, covered])
-  const mx = useMotionValue(0)
-  const my = useMotionValue(0)
-  const rx = useSpring(useTransform(my, [-0.5, 0.5], [7, -7]), { stiffness: 110, damping: 16 })
-  const ry = useSpring(useTransform(mx, [-0.5, 0.5], [-9, 9]), { stiffness: 110, damping: 16 })
-  // The backdrop art moves against the pointer (a few px, sprung) so the
-  // stage reads as a space with depth rather than a poster; the gold glow
-  // follows the pointer across the whole stage.
-  const bgX = useSpring(useTransform(mx, [-0.5, 0.5], [16, -16]), { stiffness: 60, damping: 18 })
-  const bgY = useSpring(useTransform(my, [-0.5, 0.5], [12, -12]), { stiffness: 60, damping: 18 })
-  // Compositor-only: the glow travels by transform, in fractions of the stage
-  // measured in the same normalised units the pointer already reports, so a
-  // pointer frame never triggers layout.
-  const glowSX = useSpring(mx, { stiffness: 50, damping: 18 })
-  const glowSY = useSpring(my, { stiffness: 50, damping: 18 })
-  const glowX = useTransform(glowSX, (v) => `${(v + 0.5) * 100}%`)
-  const glowY = useTransform(glowSY, (v) => `${(v + 0.5) * 100}%`)
   // The still's slow drift is only for the moments the video is not carrying
   // the motion: it stops the instant the loop is playing (two animated
   // full-stage layers were measured as a second, redundant cost).
@@ -601,26 +650,18 @@ function HeroCinema({
     document.addEventListener('visibilitychange', sync)
     return () => document.removeEventListener('visibilitychange', sync)
   }, [covered])
-  const onMove = (e: React.MouseEvent<HTMLElement>) => {
-    if (reduce) return
-    const r = e.currentTarget.getBoundingClientRect()
-    mx.set((e.clientX - r.left) / r.width - 0.5)
-    my.set((e.clientY - r.top) / r.height - 0.5)
-  }
-
   return (
     <section
       ref={heroRef}
       id="hero-stage"
       className={`relative overflow-hidden bg-[#0a0c12] text-white${covered ? ' hero-covered' : ''}`}
-      onMouseMove={onMove}
     >
       {/* Backdrop art: black paper threaded with gold. A still for everyone;
           for viewers who allow motion, a slow loop of the same scene fades in
           over it (a palindrome, so it never pops at the seam) and the whole
           layer drifts against the pointer. Overscaled a touch so the parallax
           never shows an edge. */}
-      <motion.div aria-hidden className="pointer-events-none absolute inset-0 will-change-transform" style={{ x: bgX, y: bgY, scale: 1.06 }}>
+      <div aria-hidden className="pointer-events-none absolute inset-0">
         <img
           src="/art/hero-veins-1280.webp"
           srcSet="/art/hero-veins-1280.webp 1280w, /art/hero-veins-1920.webp 1920w"
@@ -650,7 +691,7 @@ function HeroCinema({
             <source src="/art/hero-loop-veins.mp4" type="video/mp4" />
           </video>
         )}
-      </motion.div>
+      </div>
       {/* legibility: the copy column stays ink-dark, the edges vignette */}
       <div
         aria-hidden
@@ -660,72 +701,34 @@ function HeroCinema({
             'linear-gradient(90deg, rgba(10,12,18,.86) 0%, rgba(10,12,18,.62) 42%, rgba(10,12,18,.28) 100%), radial-gradient(120% 80% at 50% 115%, rgba(10,12,18,.92), transparent 60%)',
         }}
       />
-      {/* a warm glow that follows the pointer across the stage */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-        <motion.div
-          className="absolute left-0 top-0 h-[28rem] w-[28rem] rounded-full will-change-transform"
-          style={{ x: glowX, y: glowY, translateX: '-50%', translateY: '-50%', background: 'radial-gradient(closest-side, rgba(212,152,47,.22), transparent 70%)' }}
-        />
-      </div>
-      {/* drifting aurora */}
-      <motion.div
-        aria-hidden
-        className="pointer-events-none absolute -top-40 left-[8%] h-[34rem] w-[34rem] rounded-full"
-        style={{ background: 'radial-gradient(closest-side,#d4982f4d,#d4982f1f 55%,transparent 85%)' }}
-        animate={drift ? { x: [0, 60, -30, 0], y: [0, 30, 10, 0] } : undefined}
-        transition={{ duration: 26, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      <motion.div
-        aria-hidden
-        className="pointer-events-none absolute -bottom-56 right-[4%] h-[38rem] w-[38rem] rounded-full"
-        style={{ background: 'radial-gradient(closest-side,#5b5df02e,#5b5df014 55%,transparent 85%)' }}
-        animate={drift ? { x: [0, -70, 20, 0], y: [0, -30, 20, 0] } : undefined}
-        transition={{ duration: 32, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      <motion.div
-        aria-hidden
-        className="pointer-events-none absolute right-1/3 top-1/3 h-[26rem] w-[26rem] rounded-full"
-        style={{ background: 'radial-gradient(closest-side,#2dd4bf1f,#2dd4bf0f 55%,transparent 85%)' }}
-        animate={drift ? { x: [0, 40, -40, 0], y: [0, -40, 24, 0] } : undefined}
-        transition={{ duration: 38, repeat: Infinity, ease: 'easeInOut' }}
-      />
-      {/* fine dot grid for depth */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 opacity-[0.13]"
-        style={{
-          backgroundImage: 'radial-gradient(rgba(255,255,255,.55) 1px, transparent 1.4px)',
-          backgroundSize: '26px 26px',
-        }}
-      />
-
-      <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 py-20 md:grid-cols-[1.05fr_1fr] md:py-28">
+      {/* One ambient layer - the backdrop above - and the reel. The pointer
+          glow, three drifting aurora blobs, a dot grid, parallax, a 3D tilt,
+          a shimmering headline and three bobbing glass chips all ran here at
+          once (critique, 2026-10-23): a stage busier than the product on it. */}
+      {/* Two columns from lg: at a 768px tablet the headline was squeezed to
+          one word per line beside a card hanging off the edge. */}
+      <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-6 py-20 lg:grid-cols-[1.05fr_1fr] lg:py-28">
         <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-3 py-1 text-xs font-medium text-white/80 backdrop-blur">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" /> Local-first · Free · Open source
           </span>
-          <h1 className="mt-6 text-4xl font-bold leading-[1.05] tracking-tight sm:text-6xl">
+          {/* Set in the face of Folio Noir, a Signature design: the page is
+              typeset like the résumés it makes, not lit like any other app. */}
+          <h1
+            className="font-display mt-6 text-5xl font-semibold leading-[0.98] sm:text-7xl"
+           
+          >
             A resume this beautiful
             <br />
-            never leaves your{' '}
-            <span
-              className="hero-shimmer bg-clip-text text-transparent"
-              style={{
-                backgroundImage: 'linear-gradient(110deg,#8a5a12 0%,#d4982f 25%,#f7d774 50%,#d4982f 75%,#8a5a12 100%)',
-              }}
-            >
-              browser
-            </span>
-            .
+            never leaves your <span style={{ color: '#e2b04f' }}>browser</span>.
           </h1>
-          <p className="mt-5 max-w-md text-base leading-relaxed text-white/65">
-            {TEMPLATE_COUNT} designer templates you can restyle <em className="not-italic text-white/90">section by section</em>,{' '}
-            {SAMPLE_COUNT} complete examples to start from, a built-in ATS check with a parser&apos;s-eye view, PDF
-            import with on-device OCR — and not a single byte of your career story sent to any server.
+          <p className="mt-6 max-w-md text-base leading-relaxed text-white/70">
+            {TEMPLATE_COUNT} designs, a built-in ATS check, and a real vector PDF, made and kept entirely in your
+            browser. Free, with nothing to sign up for.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <button
-              className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold text-[#1c1503] shadow-[0_10px_44px_-10px_rgba(212,152,47,0.65)] transition hover:scale-[1.03] active:scale-[0.99]"
+              className="inline-flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold text-[#1c1503] shadow-[0_6px_18px_-8px_rgba(0,0,0,0.6)] transition hover:scale-[1.03] active:scale-[0.99]"
               style={{ background: GOLD }}
               onClick={onCreate}
             >
@@ -742,7 +745,7 @@ function HeroCinema({
             Already have one?{' '}
             <button
               onClick={onImportPdf}
-              className="inline-flex items-center gap-1 font-medium text-amber-300/90 underline-offset-2 hover:underline"
+              className="inline-flex items-center gap-1 font-medium text-amber-300/90 underline-offset-2 hover:underline relative before:absolute before:-inset-2 before:content-['']"
             >
               <FileUp className="h-3.5 w-3.5" /> Import your PDF
             </button>{' '}
@@ -750,22 +753,10 @@ function HeroCinema({
           </p>
 
           {/* phones: the same live morph, compact — the product stays visible */}
-          <div className="mt-10 flex justify-center md:hidden" aria-hidden data-nosnippet>
+          <div className="mt-10 flex justify-center lg:hidden" aria-hidden data-nosnippet>
             <div className="relative w-64 overflow-hidden rounded-xl border border-white/15 bg-white shadow-[0_24px_60px_-18px_rgba(0,0,0,0.8)]">
               <div className="relative aspect-[210/297] overflow-hidden">
-                <AnimatePresence initial={false}>
-                  <motion.div
-                    key={morph[ti].id}
-                    className="absolute inset-0"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.45, ease: 'easeInOut' }}
-                  >
-                    <PreviewThumb doc={morph[ti].doc} width={256} />
-                  </motion.div>
-                </AnimatePresence>
-                <div className="hero-sheen" aria-hidden />
+                <ReelPages items={morph} index={ti} width={256} />
               </div>
               {/* Inside the card's edges and allowed to wrap: on one line it ran
                   wider than the card on a phone and was cut at the left
@@ -775,7 +766,7 @@ function HeroCinema({
                   <span className="mt-[5px] h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: '#d4982f' }} />
                   <span>
                     {morph[ti].name}
-                    {morph[ti].note ? ` · ${morph[ti].note}` : ''} — same content, one click
+                    {morph[ti].note ? ` · ${morph[ti].note}` : ''}, same content
                   </span>
                 </span>
               </div>
@@ -784,18 +775,15 @@ function HeroCinema({
         </motion.div>
 
         {/* the product, demonstrated: ONE resume re-skinning itself live */}
-        <div className="hidden [perspective:1400px] md:block" aria-hidden data-nosnippet>
-          <motion.div
-            style={{ rotateX: rx, rotateY: ry, transformStyle: 'preserve-3d' }}
-            className="relative mx-auto h-[34rem] w-[30rem]"
-          >
+        <div className="hidden [perspective:1400px] lg:block" aria-hidden data-nosnippet>
+          <div className="relative mx-auto h-[34rem] w-[30rem]" style={{ transformStyle: 'preserve-3d' }}>
             {/* depth: the NEXT design waits behind */}
             <div
               className="absolute left-20 top-8 w-[24rem] overflow-hidden rounded-xl border border-white/10 opacity-35 shadow-2xl"
               style={{ transform: 'translateZ(-70px) rotate(5deg)' }}
             >
-              <div className="aspect-[210/297] overflow-hidden bg-white">
-                <PreviewThumb doc={morph[(ti + 1) % morph.length].doc} width={384} />
+              <div className="relative aspect-[210/297] overflow-hidden bg-white">
+                <ReelPages items={morph} index={(ti + 1) % morph.length} width={384} />
               </div>
             </div>
 
@@ -805,19 +793,7 @@ function HeroCinema({
               style={{ transform: 'translateZ(50px) rotate(-2deg)' }}
             >
               <div className="relative aspect-[210/297] overflow-hidden">
-                <AnimatePresence initial={false}>
-                  <motion.div
-                    key={morph[ti].id}
-                    className="absolute inset-0"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.45, ease: 'easeInOut' }}
-                  >
-                    <PreviewThumb doc={morph[ti].doc} width={416} />
-                  </motion.div>
-                </AnimatePresence>
-                <div className="hero-sheen" aria-hidden />
+                <ReelPages items={morph} index={ti} width={416} />
               </div>
               {/* live template name — proof it's the same content, restyled */}
               <div className="pointer-events-none absolute bottom-3 right-3">
@@ -831,43 +807,14 @@ function HeroCinema({
                     className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-white/20 bg-[#0a0c12]/85 px-3 py-1 text-[11px] font-medium text-white shadow-lg backdrop-blur"
                   >
                     <span className="h-1.5 w-1.5 rounded-full" style={{ background: '#d4982f' }} />
-                    {morph[ti].name} — same content, one click
+                    {morph[ti].name}
+                    {morph[ti].note ? ` · ${morph[ti].note}` : ''}, same content
                   </motion.span>
                 </AnimatePresence>
               </div>
             </div>
 
-            {/* floating proof chips */}
-            <motion.div
-              className="absolute -top-7 left-4 rounded-xl border border-white/15 bg-[#0a0c12]/80 px-3.5 py-2.5 text-xs text-white/90 shadow-xl backdrop-blur-md"
-              style={{ z: 90 }}
-              animate={reduce ? undefined : { y: [0, -7, 0] }}
-              transition={{ duration: 6.5, repeat: Infinity, ease: 'easeInOut' }}
-            >
-              <div className="font-semibold text-emerald-300">0 bytes uploaded</div>
-              <div className="mt-0.5 text-white/60">everything stays on this device</div>
-            </motion.div>
-            <motion.div
-              className="absolute -right-16 top-44 rounded-xl border border-white/15 bg-[#0a0c12]/80 px-3.5 py-2.5 text-xs text-white/90 shadow-xl backdrop-blur-md"
-              style={{ z: 80 }}
-              animate={reduce ? undefined : { y: [0, -9, 0] }}
-              transition={{ duration: 7.5, repeat: Infinity, ease: 'easeInOut', delay: 1.1 }}
-            >
-              <div className="font-semibold" style={{ color: '#f7d774' }}>
-                {TEMPLATE_COUNT} designs, one resume
-              </div>
-              <div className="mt-0.5 text-white/60">restyle section by section</div>
-            </motion.div>
-            <motion.div
-              className="absolute -bottom-14 left-2 rounded-xl border border-white/15 bg-[#0a0c12]/80 px-3.5 py-2.5 text-xs text-white/90 shadow-xl backdrop-blur-md"
-              style={{ z: 70 }}
-              animate={reduce ? undefined : { y: [0, -6, 0] }}
-              transition={{ duration: 5.8, repeat: Infinity, ease: 'easeInOut', delay: 0.5 }}
-            >
-              <div className="font-semibold text-sky-300">See what the ATS sees</div>
-              <div className="mt-0.5 text-white/60">parser's-eye view, built in</div>
-            </motion.div>
-          </motion.div>
+          </div>
         </div>
       </div>
     </section>

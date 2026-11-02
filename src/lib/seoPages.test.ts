@@ -2,9 +2,11 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { TEMPLATES, TEMPLATE_MAP, getTemplate } from '@/templates/registry'
+import { TEMPLATES, TEMPLATE_MAP, getTemplate, templatePath } from '@/templates/registry'
 import { htmlEscape } from '@/lib/utils'
 import { GUIDES } from '@/data/guides'
+import { linkMarkdown } from './inlineLinks'
+import { EXAMPLES_BY_TEMPLATE } from '@/data/library/byTemplate'
 import { PAGE_IMAGE_WIDTH } from '@/data/pageImages'
 import { examplesPageMeta, samplePageImage } from '@/lib/seoLibrary'
 import {
@@ -22,6 +24,7 @@ import {
   staticHtml,
   tagSentence,
   templatePageMeta,
+  templateKeyword,
   trimToWords,
   landingStaticHtml,
   shellHtml,
@@ -63,7 +66,7 @@ describe('the head each template page asks for', () => {
   it('names the design, its path and its preview image', () => {
     const meta = templatePageMeta('broadsheet')
     expect(meta.path).toBe('/templates/broadsheet')
-    expect(meta.title).toBe('Broadsheet résumé template — free, ATS-ready · CVAurum')
+    expect(meta.title).toBe(`${templateKeyword(TEMPLATE_MAP.broadsheet)} Resume Template: Broadsheet — Free & ATS-Ready · CVAurum`)
     expect(meta.image).toBe('/og/broadsheet.jpg')
   })
 
@@ -126,15 +129,19 @@ describe('the HTML a crawler reads without running the app', () => {
   const html = staticHtml('broadsheet')
 
   it('leads with the design as a heading', () => {
-    expect(html).toContain('<h1>Broadsheet résumé template</h1>')
+    expect(html).toContain('<h1>Broadsheet resume template</h1>')
   })
 
-  it('links to every OTHER design in the collection', () => {
+  it('links twelve related designs, not all of them, and the examples shown in this one', () => {
+    // all 74 others on every page made the design pages ~91% the same text;
+    // the gallery links every design in one hop instead
     const linked = templateLinks(html)
-    expect(linked).toHaveLength(TEMPLATES.length - 1)
-    expect(new Set(linked).size).toBe(TEMPLATES.length - 1)
+    expect(linked).toHaveLength(12)
+    expect(new Set(linked).size).toBe(12)
     expect(linked).not.toContain('broadsheet')
-    for (const id of linked) expect(TEMPLATE_MAP[id]).toBeTruthy()
+    for (const ex of EXAMPLES_BY_TEMPLATE.broadsheet ?? []) expect(html).toContain(`href="/examples/${ex.slug}"`)
+    // a link carries the design's public slug (templatePath)
+    for (const seg of linked) expect(TEMPLATES.find((t) => (t.slug ?? t.id) === seg), seg).toBeTruthy()
   })
 
   it('offers the way back to the gallery and into the app', () => {
@@ -162,7 +169,7 @@ describe('the HTML a crawler reads without running the app', () => {
 
   it('gives the gallery its own block listing all of them', () => {
     const gallery = galleryStaticHtml()
-    expect(gallery).toContain(`<h1>${TEMPLATES.length} résumé templates, all free</h1>`)
+    expect(gallery).toContain(`<h1>${TEMPLATES.length} resume templates, all free</h1>`)
     expect(templateLinks(gallery)).toHaveLength(TEMPLATES.length)
   })
 })
@@ -179,7 +186,7 @@ describe('the sitemap', () => {
     expect(locs).toHaveLength(TOTAL)
     expect(locs[0]).toBe('https://cvaurum.com/')
     expect(locs[1]).toBe('https://cvaurum.com/templates')
-    const designs = allTemplateIds().map((id) => `https://cvaurum.com/templates/${id}`)
+    const designs = allTemplateIds().map((id) => `https://cvaurum.com${templatePath(TEMPLATE_MAP[id])}`)
     expect(locs.slice(2, 2 + designs.length)).toEqual(designs)
     expect(locs[2 + designs.length]).toBe('https://cvaurum.com/examples')
     expect(locs.slice(3 + designs.length, -1 - GUIDES.length)).toEqual(
@@ -486,13 +493,13 @@ describe('llms.txt', () => {
     const t = llmsTxt()
     for (const f of COPY.facts) expect(t).toContain(`- ${f.label}: `)
     for (const l of COPY.limits) expect(t).toContain(l)
-    for (const tpl of TEMPLATES) expect(t).toContain(`https://cvaurum.com/templates/${tpl.id}`)
+    for (const tpl of TEMPLATES) expect(t).toContain(`https://cvaurum.com${templatePath(tpl)}`)
     expect(t).toContain('https://cvaurum.com/sitemap.xml')
     expect(t).toContain('https://cvaurum.com/robots.txt')
     // Home, the gallery, one line per design, the library's shelf and the
     // prompt library - the library's own pages live in the sitemap and
     // examples.md, not here.
-    expect(siteUrls()).toHaveLength(TEMPLATES.length + 4)
+    expect(siteUrls()).toHaveLength(TEMPLATES.length + 4 + GUIDES.length)
     for (const u of siteUrls()) expect(t).toContain(`- ${u}`)
     expect(t).not.toMatch(/best|beast|world-class|#1/i)
   })
@@ -508,7 +515,7 @@ describe('llms.txt', () => {
   })
   it('the full text names every template with its page, without superlatives', () => {
     const t = llmsFullTxt()
-    for (const tpl of TEMPLATES) expect(t).toContain(`https://cvaurum.com/templates/${tpl.id}`)
+    for (const tpl of TEMPLATES) expect(t).toContain(`https://cvaurum.com${templatePath(tpl)}`)
     expect(t).not.toMatch(/best|beast|world-class|#1/i)
     expect(t).toContain(COPY.oneLiner)
     for (const r of COPY.comparison) expect(t).toContain(`| ${r.capability} |`)
@@ -615,9 +622,9 @@ describe('the prompt library', () => {
 
     const html = promptsStaticHtml()
     const md = promptsMarkdown()
-    expect(html).toContain(`<h1>${PROMPTS.length} résumé prompts for an AI assistant</h1>`)
+    expect(html).toContain(`<h1>${PROMPTS.length} resume prompts for an AI assistant</h1>`)
     expect(html).toContain(htmlEscape(PROMPTS_INTRO))
-    expect(md.startsWith(`# ${PROMPTS.length} résumé prompts`)).toBe(true)
+    expect(md.startsWith(`# ${PROMPTS.length} resume prompts`)).toBe(true)
     for (const p of PROMPTS) {
       // The prompt itself is the page's content: a crawler and an assistant
       // both get the whole text, not a title and a button.
@@ -691,7 +698,7 @@ describe('the collection pages describe themselves', () => {
   it('says what the gallery is, where it sits and what is on it', () => {
     const page = node(galleryJsonLd(), 'CollectionPage')
     expect(page.url).toBe('https://cvaurum.com/templates')
-    expect(page.name).toBe(`${TEMPLATES.length} résumé templates`)
+    expect(page.name).toBe(`${TEMPLATES.length} resume templates`)
     expect(page.description.length).toBeLessThanOrEqual(DESC_MAX)
 
     const crumbs = node(galleryJsonLd(), 'BreadcrumbList').itemListElement
@@ -707,7 +714,7 @@ describe('the collection pages describe themselves', () => {
     // Each entry names the design's own page picture, not the share card, so
     // the collection is described with the pictures the page carries.
     expect(list.itemListElement.map((i: { url: string }) => i.url)).toEqual(
-      allTemplateIds().map((id) => `https://cvaurum.com/templates/${id}`)
+      allTemplateIds().map((id) => `https://cvaurum.com${templatePath(TEMPLATE_MAP[id])}`)
     )
     expect(list.itemListElement.map((i: { image: string }) => i.image)).toEqual(
       allTemplateIds().map((id) => `https://cvaurum.com${templatePageImage(id)}`)
@@ -761,7 +768,7 @@ describe('the crawl path without JavaScript', () => {
 
   it('reaches every design from the gallery in one hop', () => {
     const l = links(galleryStaticHtml())
-    for (const id of allTemplateIds()) expect(l.has(`/templates/${id}`), id).toBe(true)
+    for (const id of allTemplateIds()) expect(l.has(templatePath(TEMPLATE_MAP[id])), id).toBe(true)
   })
 
   it('links the gallery sideways to the other collections', () => {
@@ -776,8 +783,8 @@ describe('the crawl path without JavaScript', () => {
       const l = links(staticHtml(id))
       expect(l.has('/templates'), id).toBe(true)
       expect(l.has('/examples'), id).toBe(true)
-      // …and to every other design, which is what makes 68 pages one set.
-      expect(templateLinks(staticHtml(id)), id).toHaveLength(TEMPLATES.length - 1)
+      // …and to twelve related designs; the gallery joins the whole set
+      expect(templateLinks(staticHtml(id)), id).toHaveLength(12)
     }
   })
 
@@ -809,7 +816,20 @@ describe('the guides', () => {
   it('each answers one search at its own address, listed with the public pages', async () => {
     const { GUIDES } = await import('@/data/guides')
     const seo = await import('@/lib/seoPages')
-    expect(GUIDES.map((g) => g.slug)).toEqual(['free-resume-builder', 'ats-resume-checker', 'resume-builder-no-sign-up'])
+    expect(GUIDES.map((g) => g.slug)).toEqual([
+      'free-resume-builder',
+      'ats-resume-checker',
+      'resume-builder-no-sign-up',
+      'resume-format',
+      'how-to-write-a-resume',
+      'resume-for-freshers',
+      'cv-template',
+      'resume-template-word',
+      'resume-summary-examples',
+      'resume-skills',
+      'resume-action-verbs',
+      'about',
+    ])
     const paths = seo.publicUrlPaths()
     for (const g of GUIDES) expect(paths).toContain(`/${g.slug}`)
     const map = seo.sitemapXml('2026-01-01')
@@ -837,11 +857,12 @@ describe('the guides', () => {
       for (const sec of g.sections) {
         expect(html).toContain(`<h2>${htmlEscape(sec.heading)}</h2>`)
         expect(md).toContain(`## ${sec.heading}`)
-        for (const li of sec.list ?? []) expect(md).toContain(`- ${li}`)
+        // in-prose links (lib/inlineLinks) are absolute in the Markdown twin
+        for (const li of sec.list ?? []) expect(md).toContain(`- ${linkMarkdown(li, 'https://cvaurum.com')}`)
       }
       for (const f of g.faq) {
         expect(html).toContain(htmlEscape(f.q))
-        expect(md).toContain(f.a)
+        expect(md).toContain(linkMarkdown(f.a, 'https://cvaurum.com'))
       }
       // no literal escape left behind by a template string
       expect(html).not.toMatch(/\\n|\$\{/)
@@ -857,5 +878,24 @@ describe('the guides', () => {
       expect(graph.map((n) => n['@type'])).toEqual(['WebPage', 'BreadcrumbList', 'FAQPage'])
       expect(graph[2].mainEntity).toHaveLength(g.faq.length)
     }
+  })
+})
+
+describe('a design page title leads with what people search', () => {
+  // "Aria resume template" named a design nobody types into a search box;
+  // a reader looking for one types its style and layout (2026-10-24 audit).
+  it('leads with the style and layout, then names the design', async () => {
+    const { templatePageMeta, templateKeyword } = await import('./seoPages')
+    const modern = TEMPLATES.find((t) => t.tags.includes('modern') && !t.tags.includes('two-column') && !t.tags.includes('technical') && !t.tags.includes('creative') && !t.tags.includes('executive') && !t.tags.includes('minimal') && !t.tags.includes('elegant') && !t.tags.includes('classic') && !t.tags.includes('bare'))!
+    expect(templateKeyword(modern)).toBe('Modern')
+    expect(templatePageMeta(modern.id).title.startsWith(`Modern Resume Template: ${modern.name}`)).toBe(true)
+    const twoCol = TEMPLATES.find((t) => t.tags.includes('two-column'))!
+    expect(templateKeyword(twoCol)).toMatch(/Two-Column$/)
+  })
+  it('gives every design a title of its own', async () => {
+    const { templatePageMeta } = await import('./seoPages')
+    const titles = TEMPLATES.map((t) => templatePageMeta(t.id).title)
+    expect(new Set(titles).size).toBe(TEMPLATES.length)
+    for (const t of titles) expect(t).toMatch(/^[A-Z][\w-]*( [\w-]+)? Resume Template: /)
   })
 })

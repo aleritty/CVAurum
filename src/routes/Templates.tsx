@@ -17,7 +17,7 @@ import { CreateButton } from '@/components/site/HeaderActions'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { AlignLeft, ArrowRight, ChevronDown, Search, SlidersHorizontal } from 'lucide-react'
-import { TEMPLATES, galleryOrder } from '@/templates/registry'
+import { TEMPLATES, galleryOrder, templatePath } from '@/templates/registry'
 import type { TemplateConfig, TemplateTag } from '@/types/template'
 import { PagePicture } from '@/components/preview/PagePicture'
 import { HoverZoom } from '@/components/preview/HoverZoom'
@@ -132,7 +132,7 @@ export function Templates() {
         alt: pageImageAlt(tpl),
         title: tpl.name,
         caption: tagWords(tpl),
-        aboutHref: `/templates/${tpl.id}`,
+        aboutHref: `${templatePath(tpl)}`,
         aboutLabel: 'About this design',
         useLabel: 'Use this design',
         onUse: () => create(true, tpl.id),
@@ -176,8 +176,8 @@ export function Templates() {
           pushed the first card to 940px, so more than a screen of a gallery
           page was everything except the gallery. */}
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
-        <h1 className="text-[1.7rem] font-semibold leading-[1.15] tracking-tight sm:text-4xl sm:leading-tight">
-          {TEMPLATES.length} résumé templates, all free
+        <h1 className="font-display text-[2rem] font-semibold leading-[1.15] tracking-tight sm:text-4xl sm:leading-tight">
+          {TEMPLATES.length} resume templates, all free
         </h1>
         <p className="mt-2.5 max-w-2xl text-sm leading-relaxed text-muted-foreground sm:mt-3">
           Every design below is shown on the same example résumé, so what changes between cards is the layout and
@@ -448,10 +448,10 @@ function TemplateCard({
         <div className="flex flex-1 flex-col gap-2 p-3">
           <div className="flex items-center justify-between gap-2">
             {/* The name is the design's own page (/templates/<id>):
-                "Broadsheet résumé template" is a thing people search for and
+                "Broadsheet resume template" is a thing people search for and
                 a link is how they — and a crawler — reach it. */}
             <Link
-              to={`/templates/${tpl.id}`}
+              to={`${templatePath(tpl)}`}
               title={`About the ${tpl.name} template`}
               className="text-sm font-semibold text-foreground transition hover:text-primary hover:underline"
             >
@@ -462,7 +462,7 @@ function TemplateCard({
               onClick={onPick}
               aria-label={`Start a résumé in ${tpl.name} — ${tpl.description}`}
               title={`Use the ${tpl.name} template`}
-              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition hover:border-primary/50 hover:text-primary"
+              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border px-2.5 py-1 text-xs font-medium relative before:absolute before:-inset-2 before:content-[''] text-muted-foreground transition hover:border-primary/50 hover:text-primary"
             >
               Use <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
             </button>
@@ -477,7 +477,7 @@ function TemplateCard({
               .map((tag) => (
                 <span
                   key={tag}
-                  className="rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                  className="rounded-full border border-border px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground"
                 >
                   {tagLabel(tag)}
                 </span>

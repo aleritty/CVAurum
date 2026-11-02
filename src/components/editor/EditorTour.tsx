@@ -8,6 +8,7 @@
  * the guidance still shows and never points at nothing.
  */
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
+import { isMac, shortcutLabel } from '@/lib/paletteRank'
 import { createPortal } from 'react-dom'
 import { X, ArrowRight, ArrowLeft, Sparkles } from 'lucide-react'
 import { isPhoneLayout } from '@/lib/layoutMode'
@@ -50,9 +51,9 @@ const STEPS: Step[] = [
   { sel: '[data-tour="templates"]', mobileShow: { tab: 'templates', panelOpen: true }, title: `${TEMPLATE_COUNT} designs, one résumé`, body: 'Hover a design for a full-size preview with your own content; click to switch. Nothing is retyped, and every design can be restyled afterwards.', mobileBody: 'Tap any design to switch. Nothing is retyped, and every design can be restyled afterwards.' },
   { sel: '[data-tour="design"]', mobileShow: { tab: 'design', panelOpen: true }, title: 'Make it yours', body: 'Design changes colours, fonts, the header, the contact line and where it sits, heading styles, where dates and language levels go, one or two columns, spacing and page size — on any template.' },
   { sel: '[data-tour="canvas"]', mobileSel: '.rm-panel-gear .rm-section-gear', mobileShow: { tab: 'content', panelOpen: true, event: 'cvaurum:tour-show-style' }, title: 'Restyle one section', body: 'Hover a section and press its “Style” pill to change just that section: heading, icon, entry layout, date position. The eye beside it hides the section.', mobileBody: 'This “Style” button restyles one section — heading, icon, entry layout, date position. The ⋯ menu renames, hides or removes it.' },
-  { sel: '[data-tour="checks"]', mobileShow: { panelOpen: false }, title: 'Your size, your pages, readable', body: 'This chip says what the page prints: the size you set, with content flowing onto a new page when it needs one. If a few lines spill over, it offers to fit them back — never below 9pt. Beside it, the contrast check confirms every line meets WCAG AA.' },
+  { sel: '[data-tour="checks"]', mobileShow: { panelOpen: false }, title: 'Your size, your pages, readable', body: 'This chip says how your résumé prints: how many pages, and the text size. If Magic fit has made the text smaller to fit, it says so, and one tap prints it at your size instead. Beside it, a check that every line is easy to read.' },
   { sel: '[data-tour="modes"]', title: 'Edit · Preview · ATS', body: 'Preview shows exactly what exports. ATS shows the plain text an applicant-tracking system reads, how five kinds of system would split it into fields, and a keyword match against the job.' },
-  { sel: '[data-tour="palette"]', title: 'Do anything with ⌘K', body: 'Press ⌘K / Ctrl+K for a command palette — switch designs, fonts and colours, add sections, change mode. In a summary, type “/” for quick inserts.', desktopOnly: true },
+  { sel: '[data-tour="palette"]', title: `Do anything with ${shortcutLabel('Ctrl+K', isMac())}`, body: `Press ${shortcutLabel('Ctrl+K', isMac())} for a command palette — switch designs, fonts and colours, add sections, change mode. In a summary, type “/” for quick inserts.`, desktopOnly: true },
   { sel: '[data-tour="share"]', title: 'Share privately', body: 'Send an encrypted link: the résumé is sealed with a passphrase inside the link and never touches a server.' },
   { sel: '[data-tour="export"]', title: 'Download, free', body: 'PDF or Word, unlimited, no account, no watermark. The PDF is real selectable text, tagged for screen readers (PDF/UA-1) and archival (PDF/A-2B).' },
 ]
@@ -62,6 +63,7 @@ export function EditorTour() {
   const [i, setI] = useState(0)
   const [rect, setRect] = useState<DOMRect | null>(null)
   const [, force] = useState(0)
+  const [invite, setInvite] = useState(false)
 
   // Open on first visit; allow re-open via a global event (the "?" button).
   useEffect(() => {
@@ -71,8 +73,11 @@ export function EditorTour() {
     } catch {
       /* private mode — just behave as unseen */
     }
+    // A first visit is invited, not taken on the tour: it used to open itself,
+    // dimmed over the author's résumé, before they had done anything - eleven
+    // cards of lecture. A small card offers it; either answer settles it.
     if (!seen) {
-      const t = setTimeout(() => setOpen(true), 650)
+      const t = setTimeout(() => setInvite(true), 1200)
       return () => clearTimeout(t)
     }
   }, [])
@@ -137,9 +142,48 @@ export function EditorTour() {
       /* ignore */
     }
     setOpen(false)
+    // the canvas tip waits for this: a first visit used to get the invite,
+    // the tip and the Templates panel all at once (critique round 3)
+    window.dispatchEvent(new Event('cvaurum:tour-settled'))
   }
 
-  if (!open) return null
+  if (!open) {
+    if (!invite) return null
+    return createPortal(
+      <div
+        role="region"
+        aria-label="Editor tour"
+        className="fixed bottom-4 left-4 z-[70] w-[min(20rem,calc(100vw-2rem))] rounded-xl border border-border bg-surface p-4 text-sm text-foreground shadow-float"
+      >
+        <p className="font-medium">New here?</p>
+        <p className="mt-1 text-muted-foreground">A one-minute tour shows where everything is. You can take it any time from the ? button.</p>
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            className="btn-primary btn-sm phone:h-10"
+            onClick={() => {
+              setInvite(false)
+              setI(0)
+              setOpen(true)
+            }}
+          >
+            Show me around
+          </button>
+          <button
+            type="button"
+            className="btn-ghost btn-sm phone:h-10"
+            onClick={() => {
+              setInvite(false)
+              finish()
+            }}
+          >
+            No thanks
+          </button>
+        </div>
+      </div>,
+      document.body
+    )
+  }
 
   const last = i === steps.length - 1
   const vw = window.innerWidth

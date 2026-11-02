@@ -16,7 +16,8 @@ import { LIBRARY } from '@/data/library'
 import { CATEGORY_LABELS, LIBRARY_CATEGORIES, REGION_LABELS, SENIORITY_LABELS } from '@/data/library/types'
 import type { LibraryCategory, LibrarySample } from '@/data/library/types'
 import { relatedSamples } from '@/data/library/related'
-import { TEMPLATE_MAP } from '@/templates/registry'
+import { pageDates } from './seoDates'
+import { TEMPLATE_MAP, getTemplate, templatePath } from '@/templates/registry'
 import { htmlEscape } from '@/lib/utils'
 import { SITE as COPY } from '@/data/siteCopy'
 import { PAGE_IMAGE_HEIGHT, PAGE_IMAGE_WIDTH } from '@/data/pageImages'
@@ -168,12 +169,20 @@ export function sampleImageAlt(slug: string): string {
   return `${s.role} résumé example — ${stage}, written for ${REGION_LABELS[s.region]}${tpl ? `, set in the ${tpl.name} design` : ''}`
 }
 
+const SHORT_REGION: Record<LibrarySample['region'], string> = { india: 'India', us: 'US', uk: 'UK' }
+
 export function samplePageMeta(slug: string): SamplePageMeta {
   const s = must(slug)
-  const region = s.region === 'us' ? '' : ` (${REGION_LABELS[s.region]})`
+  // Said the way it is searched: "resume" without its accent, "CV" in the
+  // UK, and the country only where two samples share a role and the title
+  // would otherwise repeat; "(India)" on every Indian sample narrowed a
+  // title read everywhere (2026-10-24 audit).
+  const noun = s.region === 'uk' ? 'CV Example' : 'Resume Example'
+  const shared = LIBRARY.filter((x) => x.role === s.role).length > 1
+  const region = shared ? ` (${SHORT_REGION[s.region]})` : ''
   return {
     path: `/examples/${s.slug}`,
-    title: `${s.role} Résumé Example${region} — Free Template You Can Edit · CVAurum`,
+    title: `${s.role} ${noun}${region} — Free Template You Can Edit · CVAurum`,
     description: trim(s.blurb),
     // This sample's own card, not the design's: the preview shows the résumé
     // the page is about.
@@ -280,11 +289,12 @@ export function sampleStaticHtml(slug: string): string {
     <h1>${htmlEscape(s.role)} résumé example</h1>
     ${figure(slug, true)}
     <p>${htmlEscape(s.blurb)}</p>
-    <p>Written for ${htmlEscape(REGION_LABELS[s.region])}, at ${htmlEscape(SENIORITY_LABELS[s.seniority].toLowerCase())}, in the ${htmlEscape(CATEGORY_LABELS[s.category].toLowerCase())} field${tpl ? `, shown in the <a href="/templates/${s.template}">${htmlEscape(tpl.name)}</a> design` : ''}. Every name, employer, address and number below is invented.</p>
+    <p>Written for ${htmlEscape(REGION_LABELS[s.region])}, at ${htmlEscape(SENIORITY_LABELS[s.seniority].toLowerCase())}, in the ${htmlEscape(CATEGORY_LABELS[s.category].toLowerCase())} field${tpl ? `, shown in the <a href="${templatePath(getTemplate(s.template))}">${htmlEscape(tpl.name)}</a> design` : ''}. Every name, employer, address and number below is invented.</p>
     <p><a href="/app">Use this example</a> · <a href="/examples">Browse all ${LIBRARY.length} résumé examples</a> · <a href="/templates">Browse the résumé templates</a></p>
     <article>
 ${resumeHtml(s)}
     </article>
+${guideHtml(s)}
     <nav aria-label="Nearby examples">
       <h2>Similar résumé examples</h2>
       <ul>
@@ -364,7 +374,7 @@ export function sampleMarkdown(slug: string): string {
     `- Field: ${CATEGORY_LABELS[s.category]}`,
     `- Career stage: ${SENIORITY_LABELS[s.seniority]}`,
     `- Written for: ${REGION_LABELS[s.region]}`,
-    `- Design: ${TEMPLATE_MAP[s.template]?.name ?? s.template} (${HOST}/templates/${s.template})`,
+    `- Design: ${TEMPLATE_MAP[s.template]?.name ?? s.template} (${HOST}${templatePath(getTemplate(s.template))})`,
     `- Open it: ${HOST}/examples/${s.slug}`,
     '',
     'Every name, employer, address, phone number and figure below is invented.',
@@ -396,7 +406,31 @@ export function sampleMarkdown(slug: string): string {
     for (const g of c.skills) lines.push(`- **${plain(g.name)}**: ${(g.keywords ?? []).join(', ')}`)
     lines.push('')
   }
+  if (s.guide) {
+    lines.push('---', '', `## Why this ${s.role} résumé works`, '')
+    for (const w of s.guide.why) lines.push(`- ${w}`)
+    lines.push('', `## ${s.role} résumé: common questions`, '')
+    for (const f of s.guide.faq) lines.push(`### ${f.q}`, '', f.a, '')
+  }
   return lines.join('\n')
+}
+
+/** The advice under a sample (LibrarySample.guide), for a reader without
+ *  scripts: why it works, then the role's common questions. */
+function guideHtml(s: LibrarySample): string {
+  if (!s.guide) return ''
+  const why = s.guide.why.map((w) => `        <li>${htmlEscape(w)}</li>`).join('\n')
+  const faq = s.guide.faq.map((f) => `      <h3>${htmlEscape(f.q)}</h3>\n      <p>${htmlEscape(f.a)}</p>`).join('\n')
+  return `    <section>
+      <h2>Why this ${htmlEscape(s.role)} résumé works</h2>
+      <ul>
+${why}
+      </ul>
+    </section>
+    <section>
+      <h2>${htmlEscape(s.role)} résumé: common questions</h2>
+${faq}
+    </section>`
 }
 
 /* ------------------------------------------------------ structured data */
@@ -420,6 +454,7 @@ export function sampleBreadcrumbJsonLd(slug: string): string {
         '@type': 'WebPage',
         '@id': url,
         url,
+        ...pageDates(url),
         name: `${s.role} résumé example`,
         primaryImageOfPage: {
           '@type': 'ImageObject',
@@ -482,9 +517,10 @@ export function examplesJsonLd(): string {
         '@type': 'CollectionPage',
         '@id': url,
         url,
+        ...pageDates(url),
         name: `${LIBRARY.length} résumé examples`,
         description: trim(EXAMPLES_INTRO),
-        isPartOf: { '@type': 'WebSite', '@id': `${HOST}/`, url: `${HOST}/`, name: 'CVAurum' },
+        isPartOf: { '@type': 'WebSite', '@id': `${HOST}/#website`, url: `${HOST}/`, name: 'CVAurum' },
       },
       {
         '@type': 'BreadcrumbList',

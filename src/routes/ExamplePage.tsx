@@ -15,15 +15,15 @@
  */
 import { useEffect, useMemo, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowRight, ChevronRight, ShieldCheck, Wand2 } from 'lucide-react'
+import { ArrowRight, Check, ChevronRight, ShieldCheck, Wand2 } from 'lucide-react'
 import { getSample } from '@/data/library'
 // Written beside the images themselves, so the size in the markup is the size
 // of the file on disk and a page never reserves the wrong box for it.
 import { PAGE_IMAGE_WIDTH } from '@/data/pageImages'
-import { sampleDoc } from '@/data/library/doc'
+import { sampleDoc, sampleStyle } from '@/data/library/doc'
 import { relatedSamples, sampleShape } from '@/data/library/related'
 import { CATEGORY_LABELS, REGION_LABELS, SENIORITY_LABELS, type LibrarySample } from '@/data/library/types'
-import { getTemplate } from '@/templates/registry'
+import { getTemplate, templatePath } from '@/templates/registry'
 import { PreviewThumb } from '@/components/preview/PreviewThumb'
 import { SiteFooter, SiteHeader } from '@/components/site/SiteChrome'
 import { useResumeActions } from '@/components/dashboard/newResume'
@@ -78,6 +78,8 @@ function Example({ sample }: { sample: LibrarySample }) {
   const shape = useMemo(() => sampleShape(sample), [sample])
   const related = useMemo(() => relatedSamples(sample.slug), [sample.slug])
   const tpl = getTemplate(sample.template)
+  // the style options this sample wears on top of its design (library/showcase)
+  const styled = sampleStyle(sample)
 
   return (
     <div className="min-h-full bg-background">
@@ -97,7 +99,7 @@ function Example({ sample }: { sample: LibrarySample }) {
         <div className="mt-6 grid gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
           {/* What it is and the one button, first on every width. */}
           <div className="order-1 lg:order-2">
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{sample.role} résumé example</h1>
+            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{sample.role} resume example</h1>
             <p className="mt-3 text-sm leading-relaxed text-muted-foreground">{sample.blurb}</p>
 
             <div className="mt-6 flex flex-wrap items-center gap-3">
@@ -141,7 +143,9 @@ function Example({ sample }: { sample: LibrarySample }) {
               />
             </figure>
             <p className="mt-2.5 text-center text-[11px] text-muted-foreground">
-              Shown in the {tpl.name} design. Switching design later keeps every word.
+              Shown in the {tpl.name} design
+              {styled.length ? ` with ${styled.map((l) => l.toLowerCase()).join(' and ')}` : ''}. Switching design later
+              keeps every word.
             </p>
           </div>
 
@@ -161,11 +165,12 @@ function Example({ sample }: { sample: LibrarySample }) {
               <Fact
                 label="Design"
                 value={
-                  <Link className="text-primary hover:underline" to={`/templates/${tpl.id}`}>
+                  <Link className="text-primary hover:underline" to={`${templatePath(tpl)}`}>
                     {tpl.name}
                   </Link>
                 }
               />
+              {styled.length > 0 && <Fact label="Styled with" value={styled.join(' · ')} />}
               <Fact
                 last
                 label="Sections"
@@ -233,6 +238,35 @@ function Example({ sample }: { sample: LibrarySample }) {
           </div>
 
         </div>
+
+        {/* The advice that makes the page more than a specimen
+            (LibrarySample.guide): why it works, then the role's questions. */}
+        {sample.guide && (
+          <div className="mt-14 grid gap-10 border-t border-border pt-8 lg:grid-cols-2">
+            <section>
+              <h2 className="text-lg font-semibold tracking-tight">Why this {sample.role} résumé works</h2>
+              <ul className="mt-4 space-y-3">
+                {sample.guide.why.map((w) => (
+                  <li key={w} className="flex gap-2.5 text-sm leading-relaxed text-foreground">
+                    <Check className="mt-1 h-4 w-4 shrink-0 text-success" aria-hidden />
+                    <span>{w}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+            <section>
+              <h2 className="text-lg font-semibold tracking-tight">{sample.role} résumé: common questions</h2>
+              <div className="mt-4 space-y-5">
+                {sample.guide.faq.map((f) => (
+                  <div key={f.q}>
+                    <h3 className="text-sm font-semibold">{f.q}</h3>
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{f.a}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
 
         {related.length > 0 && (
           <section className="mt-14 border-t border-border pt-8">

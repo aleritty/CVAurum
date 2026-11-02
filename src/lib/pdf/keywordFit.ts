@@ -20,6 +20,7 @@
  * render, so the two wrap identically. Doing it only to the export's DOM makes
  * the PDF disagree with the preview it was previewed from.
  */
+import { settleLooseLines } from './looseLines'
 import { ensureFontsReady } from '@/data/fonts'
 
 /** Terms that must survive whole, plus the last-word-and-separator pair
@@ -249,6 +250,7 @@ export function refitWhenFontsReady(
     // alignment) needs to re-measure here too: the fallback face this ran
     // against a moment ago carried different metrics than the real one.
     afterRefit?.()
+    settleLooseLines(root)
   })
   return () => {
     cancelled = true

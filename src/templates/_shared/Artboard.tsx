@@ -9,7 +9,7 @@ import { contactLabel, contactLines, contactsInSidebar, type ContactLine } from 
 import type { RenderMode, TemplateConfig } from '@/types/template'
 import { fontStack, ensureFont } from '@/data/fonts'
 import { MM_TO_PX, PAGE_DIMENSIONS } from '@/types/metadata'
-import { metaColumnOn, resolveOrder, sectionLabel } from '@/lib/sections'
+import { emptySectionsShown, metaColumnOn, resolveOrder, sectionLabel } from '@/lib/sections'
 import { cn, safeHref } from '@/lib/utils'
 import { headingCaseClasses, headingVars, typeScaleVars } from '@/lib/typeStyle'
 import {
@@ -33,6 +33,7 @@ import { fitLineHeight } from '@/lib/fitOnePage'
 const FIT_AS_SET: FitVector = { type: 1, space: 1 }
 import { applyKeywordFit, fitHeadingWords, refitWhenFontsReady } from '@/lib/pdf/keywordFit'
 import { alignAsideVisualToMain } from './asideVisualAlign'
+import { settleLooseLines } from '@/lib/pdf/looseLines'
 import { SectionBody } from './sections'
 import { CONTACT_ICON_CHOICES, ContactIcons, contactIcon, prettyUrl, cleanEmail, Deco } from './atoms'
 import { Ed, EdMeta, type EditFn, type MetaEditFn } from './Editable'
@@ -729,6 +730,9 @@ function contactsClass(doc: ResumeDocument, inSidebar = false): string {
     style === 'stacked' ? 'rm-contacts-stacked' : '',
     style === 'strip' ? `rm-contacts-strip rm-strip-${stripCols}${full ? ` rm-links-${contactLinks ?? 'ledger'}` : ''}` : '',
     style === 'pills' ? 'rm-contacts-pills' : '',
+    // A plain line of contacts: the only arrangement a design's own mark
+    // between them belongs on (templates.css).
+    lined ? 'rm-contacts-inline' : '',
     lined && contactSeparator && contactSeparator !== 'none' ? 'rm-contacts-sep' : '',
     lined && contactSeparator === 'node' ? 'rm-contacts-node' : '',
   ]
@@ -842,6 +846,7 @@ function EditableContacts({
             c.basics.email = v.trim()
           }}
           placeholder="email@example.com"
+          label="Email"
         />,
         'em',
         undefined,
@@ -859,6 +864,7 @@ function EditableContacts({
             c.basics.phone = v.trim()
           }}
           placeholder="+1 555 000 0000"
+          label="Phone"
         />,
         'ph',
         undefined,
@@ -875,6 +881,7 @@ function EditableContacts({
             c.basics.location = { ...c.basics.location, city: (city || '').trim(), region: rest.join(',').trim() }
           }}
           placeholder="City, Region"
+          label="Location"
         />,
         'loc',
         undefined,
@@ -904,6 +911,7 @@ function EditableContacts({
             else c.basics.urlLabel = next
           }}
           placeholder="yoursite.com"
+          label="Website"
         />,
         'url',
         <LinkButton
@@ -974,6 +982,7 @@ function EditableContacts({
                   ;(c.basics.profiles ??= [])[i].label = v.trim()
                 }}
                 placeholder="Label"
+                label={`${p.network || 'Profile'} link text`}
               />,
               `p${i}`,
               <LinkButton
@@ -1609,7 +1618,7 @@ function Section({
     // default: sectionOverrideClasses resolves section-over-document, so one
     // choice in Design restyles every heading and a section that decided for
     // itself still wins.
-    ...sectionOverrideClasses(ss, doc.metadata.typography, doc.metadata.layout.dateAlign),
+    ...sectionOverrideClasses(ss, doc.metadata.typography, doc.metadata.layout.dateAlign, sectionKey),
     ...(keepEntries ? ['rm-keep-entries'] : []),
     ...(compact ? ['rm-section-compact'] : []),
   ].join(' ')
@@ -1638,15 +1647,20 @@ function Section({
       : null
   // The heading's words are typed into on the page: an emptied heading goes
   // back to the section's own name, which is what an ATS reads for it.
+  // The section's own name, as it reads with no rename.
+  const ownName = sectionLabel(sectionKey, { ...doc, metadata: { ...doc.metadata, layout: { ...doc.metadata.layout, headings: {} } } })
   const title = (
     <EdMeta
       editMeta={edit ? editMeta : undefined}
       value={sectionLabel(sectionKey, doc)}
       className="rm-section-title-text"
-      placeholder={sectionLabel(sectionKey, { ...doc, metadata: { ...doc.metadata, layout: { ...doc.metadata.layout, headings: {} } } })}
+      placeholder={ownName}
       apply={(m, v) => {
+        // Emptied, or set back to its own name, a heading has no rename: it
+        // follows the section's name again (an Escape that restores the
+        // heading must not leave a rename behind that looks the same).
         const next = v.trim()
-        if (next) (m.layout.headings ??= {})[sectionKey] = next
+        if (next && next !== ownName) (m.layout.headings ??= {})[sectionKey] = next
         else if (m.layout.headings) delete m.layout.headings[sectionKey]
       }}
     />
@@ -1809,7 +1823,18 @@ export function Artboard({
   // In edit mode keep empty (non-hidden) sections so they render on the canvas
   // with their inline "Add item" affordance; print/thumbnail show content only.
   const editing = !!edit
-  const { main, aside, footer } = useMemo(() => resolveOrder(doc, { includeEmpty: editing }), [doc, editing])
+  // Editing shows empty sections by the author's choice (emptySectionsShown),
+  // and always the ones just added; print and thumbnails never do.
+  const emptyPref = useEditorStore((s) => s.emptySections)
+  const fresh = useEditorStore((s) => s.freshSections)
+  const { main, aside, footer } = useMemo(
+    () =>
+      resolveOrder(doc, {
+        includeEmpty: editing && emptySectionsShown(emptyPref, doc.content),
+        keepEmpty: editing ? (k) => fresh.includes(k) : undefined,
+      }),
+    [doc, editing, emptyPref, fresh]
+  )
   const twoCol = doc.metadata.layout.columns === 2 && aside.length > 0
   const t = doc.metadata.typography
 
@@ -1931,9 +1956,11 @@ export function Artboard({
     // else, but it must be settled before keywords are measured against it.
     fitHeadingWords(rootRef.current)
     applyKeywordFit(rootRef.current)
-    // Last: the aside's photo/monogram gap depends on where the settled
-    // header and headings actually landed.
+    // The aside's photo/monogram gap depends on where the settled header and
+    // headings actually landed.
     alignAsideVisualToMain(rootRef.current)
+    // Last: it only chooses alignment, never a line break (looseLines.ts).
+    settleLooseLines(rootRef.current)
   })
   // ...and again once the document's own faces have actually loaded. The pass
   // above fires with whatever the browser had at the time, which for a
@@ -1947,8 +1974,11 @@ export function Artboard({
   // ...and the faces the template's own stylesheet names (TemplateConfig.fonts).
   const templateFaces = (config.fonts ?? []).join('|')
   useEffect(() => {
-    if (!rootRef.current) return
-    return refitWhenFontsReady(rootRef.current, [fontFamily, headingFamily, nameFamily, ...templateFaces.split('|')])
+    const root = rootRef.current
+    if (!root) return
+    return refitWhenFontsReady(root, [fontFamily, headingFamily, nameFamily, ...templateFaces.split('|')], () =>
+      alignAsideVisualToMain(root)
+    )
   }, [fontFamily, headingFamily, nameFamily, templateFaces])
 
   return (

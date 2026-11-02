@@ -17,11 +17,12 @@ import { Link, useParams } from 'react-router-dom'
 import { ArrowRight, Check, ChevronRight, Wand2 } from 'lucide-react'
 import { createDocument } from '@/data/defaults'
 import { CUSTOMIZE } from '@/data/customize'
+import { TEMPLATE_NOTES } from '@/data/templateNotes'
 // Written beside the images themselves, so the size in the markup is the size
 // of the file on disk and a page never reserves the wrong box for it.
 import { PAGE_IMAGE_WIDTH } from '@/data/pageImages'
 import { applyTemplateToMetadata } from '@/lib/templateApply'
-import { getTemplate } from '@/templates/registry'
+import { TEMPLATES, getTemplate, templatePath } from '@/templates/registry'
 import type { ResumeDocument } from '@/types/document'
 import { PreviewThumb } from '@/components/preview/PreviewThumb'
 import { SiteFooter, SiteHeader } from '@/components/site/SiteChrome'
@@ -44,8 +45,11 @@ import {
 
 
 export function TemplatePage() {
-  const { id } = useParams<{ id: string }>()
-  if (!isTemplateId(id)) return <UnknownDesign id={id} />
+  const { id: segment } = useParams<{ id: string }>()
+  // The address carries a design's public slug (templatePath), which is its
+  // id unless the design was renamed; an old id still finds its design.
+  const id = TEMPLATES.find((t) => t.slug === segment)?.id ?? segment
+  if (!isTemplateId(id)) return <UnknownDesign id={segment} />
   // Keyed on the id so React rebuilds the page (and its preview) when a reader
   // walks from one design to the next through the related row.
   return <Design key={id} id={id} />
@@ -54,6 +58,7 @@ export function TemplatePage() {
 function Design({ id }: { id: string }) {
   const tpl = getTemplate(id)
   const meta = templatePageMeta(id)
+  const note = TEMPLATE_NOTES[id]
   useSeo({
     title: meta.title,
     description: meta.description,
@@ -115,7 +120,7 @@ function Design({ id }: { id: string }) {
         */}
         <div className="mt-5 grid grid-cols-1 gap-8 lg:grid-cols-[560px_minmax(0,1fr)] lg:gap-12">
           <div className="order-1 min-w-0 lg:order-2 lg:pt-2">
-            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{tpl.name} résumé template</h1>
+            <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">{tpl.name} resume template</h1>
             <p className="mt-1.5 text-sm font-medium text-primary">{tagSentence(tpl.tags)}</p>
             <p className="mt-4 text-sm leading-relaxed text-muted-foreground">{tpl.description}</p>
 
@@ -185,6 +190,25 @@ function Design({ id }: { id: string }) {
           </div>
         </div>
 
+        {/* What this design is for, in its own words (data/templateNotes) -
+            the part of the page no other design shares. */}
+        {note && (
+          <section className="mt-14 grid gap-8 border-t border-border pt-8 md:grid-cols-3">
+            <div>
+              <h2 className="text-base font-semibold tracking-tight">Who the {tpl.name} design suits</h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{note.suits}</p>
+            </div>
+            <div>
+              <h2 className="text-base font-semibold tracking-tight">How the page is laid out</h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{note.layout}</p>
+            </div>
+            <div>
+              <h2 className="text-base font-semibold tracking-tight">How it reads to an ATS</h2>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{note.ats}</p>
+            </div>
+          </section>
+        )}
+
         {/* A visitor from a search judges the design by one picture; say
             plainly that the colour, photo and columns they may not like are
             all switches, before they leave for that reason. */}
@@ -216,7 +240,7 @@ function Design({ id }: { id: string }) {
             {related.map((r) => (
               <li key={r.id}>
                 <Link
-                  to={`/templates/${r.id}`}
+                  to={`${templatePath(r)}`}
                   className="group block overflow-hidden rounded-lg border border-border bg-surface shadow-soft transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-card"
                 >
                   <div data-nosnippet className="aspect-[210/297] overflow-hidden border-b border-border bg-white">

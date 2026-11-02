@@ -69,8 +69,7 @@ export function TemplateGallery({ doc }: { doc: ResumeDocument }) {
   const toggleTag = (tag: TemplateTag) =>
     setFilter((f) => ({ ...f, tags: f.tags.includes(tag) ? f.tags.filter((t) => t !== tag) : [...f.tags, tag] }))
   const pick = (tpl: (typeof TEMPLATES)[number]) => {
-    applyTemplate(tpl.defaults)
-    toast(`Switched to ${tpl.name}`, 'success')
+    switchTemplate(tpl, applyTemplate, toast)
   }
 
   return (
@@ -78,7 +77,7 @@ export function TemplateGallery({ doc }: { doc: ResumeDocument }) {
       <p className="text-sm text-muted-foreground">
         {TEMPLATES.length} templates — every one ATS-friendly.{' '}
         {isBlank
-          ? 'Previews show example content until you add yours.'
+          ? 'Pick one to start; you can switch any time. Previews show example content until you add yours.'
           : 'Your content flows into every one — switch any time.'}{' '}
         {phone ? 'Tap Preview on a card for a full-size look.' : 'Hover a card for a full-size look.'}
       </p>
@@ -103,7 +102,7 @@ export function TemplateGallery({ doc }: { doc: ResumeDocument }) {
           <SlidersHorizontal className="h-3.5 w-3.5" />
           Filters
           {filter.tags.length + (filter.atsOnly ? 1 : 0) > 0 && (
-            <span className="rounded-full bg-primary/10 px-1.5 text-[10px] font-semibold text-primary">
+            <span className="rounded-full bg-primary/10 px-1.5 text-[11px] font-semibold text-primary">
               {filter.tags.length + (filter.atsOnly ? 1 : 0)}
             </span>
           )}
@@ -332,7 +331,7 @@ function TemplateCard({
           <span className="text-[13px] font-medium text-foreground">{tpl.name}</span>
           {tpl.atsSafe && (
             <span
-              className="inline-flex items-center gap-1 text-[10px] font-medium text-success"
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-success"
               title="Parses cleanly in ATS"
             >
               <ShieldCheck className="h-3 w-3" />
@@ -344,4 +343,29 @@ function TemplateCard({
       </div>
     </HoverZoom>
   )
+}
+
+/**
+ * Switch the design, and offer the way back right in the message: a switch
+ * restyles every page at once, and the design settings it replaced were
+ * otherwise one undo among many. Undo restores exactly what the document had,
+ * whatever has been edited since.
+ */
+export function switchTemplate(
+  tpl: (typeof TEMPLATES)[number],
+  applyTemplate: (defaults: (typeof TEMPLATES)[number]['defaults']) => void,
+  toast: (message: string, kind?: 'success' | 'info' | 'error', action?: { label: string; run: () => void }) => void
+) {
+  const before = useResumeStore.getState().doc?.metadata
+  const snapshot = before ? structuredClone(before) : null
+  applyTemplate(tpl.defaults)
+  toast(`Switched to ${tpl.name}`, 'success', snapshot
+    ? {
+        label: 'Undo',
+        run: () =>
+          useResumeStore.getState().updateDoc((d) => {
+            d.metadata = structuredClone(snapshot)
+          }),
+      }
+    : undefined)
 }

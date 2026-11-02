@@ -3,6 +3,17 @@ import { create } from 'zustand'
 import type { FitResult } from '@/lib/fitReadout'
 import type { FitTrialFn, Suggestion } from '@/lib/fitSuggest'
 import type { ContrastGroup, ContrastReport } from '@/lib/a11y'
+import type { EmptySectionsPref } from '@/lib/sections'
+
+const EMPTY_KEY = 'cvaurum:empty-sections'
+function readEmptyPref(): EmptySectionsPref {
+  try {
+    const v = localStorage.getItem(EMPTY_KEY)
+    return v === 'show' || v === 'hide' ? v : 'auto'
+  } catch {
+    return 'auto'
+  }
+}
 
 /** The per-section visual style fields the style painter copies. */
 export type CopiedStyle = Record<string, string>
@@ -44,6 +55,9 @@ interface EditorState {
   fitOffers: Suggestion[]
   /** True while the preview is measuring candidate moves. */
   fitSuggesting: boolean
+  /** Why the page target is out of reach, measured (fitSuggest explainShort):
+   *  the body the target would need, null when no size reaches it. */
+  fitShort: { pages: number; body: number | null; floor: number } | null
   /** What every run of words on the page measures against what it stands on
    *  (src/lib/a11y), read off the print tree the export is painted from once
    *  the fit has settled, with its findings gathered by the setting that
@@ -55,6 +69,13 @@ interface EditorState {
   previewExact: boolean
   /** dim everything except the section under the cursor (zen editing) */
   focusMode: boolean
+  /** Whether the editing canvas shows sections with nothing in them
+   *  (lib/sections emptySectionsShown); this browser's choice, not the
+   *  document's. */
+  emptySections: EmptySectionsPref
+  /** Sections added (or shown again) this session: kept on the canvas while
+   *  empty, whatever emptySections says, so they never vanish unfilled. */
+  freshSections: string[]
   /** style painter clipboard — a section's visual style, ready to paint */
   copiedStyle: CopiedStyle | null
   /** recruiter skim heatmap overlay on the canvas */
@@ -82,10 +103,13 @@ interface EditorState {
   setFitTrial: (fn: FitTrialFn | null) => void
   setFitOffers: (offers: Suggestion[]) => void
   setFitSuggesting: (v: boolean) => void
+  setFitShort: (v: { pages: number; body: number | null; floor: number } | null) => void
   setContrast: (r: { report: ContrastReport; groups: ContrastGroup[] } | null) => void
   setAtsView: (v: boolean) => void
   setPreviewExact: (v: boolean) => void
   setFocusMode: (v: boolean) => void
+  setEmptySections: (v: EmptySectionsPref) => void
+  markFresh: (key: string) => void
   setCopiedStyle: (v: CopiedStyle | null) => void
   setSkimView: (v: boolean) => void
   setPdfExporting: (v: boolean) => void
@@ -105,12 +129,15 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   fitTrial: null,
   fitOffers: [],
   fitSuggesting: false,
+  fitShort: null,
   contrast: null,
   atsView: false,
   copiedStyle: null,
   skimView: false,
   previewExact: false,
   focusMode: false,
+  emptySections: readEmptyPref(),
+  freshSections: [],
   pdfExporting: false,
 
   setLeftTab: (leftTab) => set({ leftTab }),
@@ -172,12 +199,28 @@ export const useEditorStore = create<EditorState>((set, get) => ({
     if (cur.length === fitOffers.length && cur.every((o, i) => o.id === fitOffers[i].id && o.label === fitOffers[i].label)) return
     set({ fitOffers })
   },
+  setFitShort: (fitShort) => {
+    const cur = get().fitShort
+    if (cur === fitShort || (cur && fitShort && cur.pages === fitShort.pages && cur.body === fitShort.body && cur.floor === fitShort.floor)) return
+    set({ fitShort })
+  },
   setFitSuggesting: (fitSuggesting) => {
     if (get().fitSuggesting !== fitSuggesting) set({ fitSuggesting })
   },
   setAtsView: (atsView) => set({ atsView }),
   setPreviewExact: (previewExact) => set({ previewExact }),
   setFocusMode: (focusMode) => set({ focusMode }),
+  setEmptySections: (emptySections) => {
+    try {
+      localStorage.setItem(EMPTY_KEY, emptySections)
+    } catch {
+      /* private mode: the choice lasts this session */
+    }
+    set({ emptySections })
+  },
+  markFresh: (key) => {
+    if (!get().freshSections.includes(key)) set({ freshSections: [...get().freshSections, key] })
+  },
   setCopiedStyle: (copiedStyle) => set({ copiedStyle }),
   setSkimView: (skimView) => set({ skimView }),
   setPdfExporting: (pdfExporting) => set({ pdfExporting }),

@@ -38,23 +38,25 @@
  * outright rather than estimated (see PageChrome.tsx's own comment).
  * Auto-fit scales the page to the available width.
  */
+import { watchOptionalReveal } from './optionalReveal'
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Maximize, ZoomIn, ZoomOut } from 'lucide-react'
+import { Maximize, PencilLine, ZoomIn, ZoomOut } from 'lucide-react'
 import type { ResumeDocument } from '@/types/document'
 import { PAGE_DIMENSIONS, MM_TO_PX } from '@/types/metadata'
 import { ensureFontsReady } from '@/data/fonts'
 import { useEditorStore } from '@/store/useEditorStore'
 import { useResumeStore } from '@/store/useResumeStore'
 import { useIsPhone, useMediaQuery } from '@/hooks/useIsPhone'
-import { clamp, uid } from '@/lib/utils'
-import { BODY_SECTION_KEYS, customKey } from '@/lib/sections'
+import { clamp, htmlToText, uid } from '@/lib/utils'
+import { BODY_SECTION_KEYS, customKey, findItem, sectionLabel } from '@/lib/sections'
+import type { PageBreakPin } from '@/types/metadata'
 import { fitToPages } from '@/lib/fitOnePage'
 import type { FitVector } from '@/lib/fitOnePage'
 import { fitRulesOf } from '@/lib/fitReadout'
 import { countPagesForFit, measurePages, sectionsFromY } from '@/lib/pdf/pageMeasure'
 import { preparePrintTree } from '@/lib/pdf/prepareTree'
-import { suggestFitOn, suggestFits } from '@/lib/fitSuggest'
+import { explainShort, suggestFitOn, suggestFits } from '@/lib/fitSuggest'
 import { FitChip } from './FitChip'
 import { ContrastChip } from './ContrastChip'
 
@@ -71,14 +73,15 @@ import {
   exceedsOnePage,
   onePageMarginMm,
 } from '@/lib/pdf/metrics'
-import { resolveForcedCutsPx } from '@/lib/pdf/pageBreaks'
+import { resolveForcedPins } from '@/lib/pdf/pageBreaks'
 import {
   collectSectionAnchors,
   collectSectionAnchorsByKey,
   mapCutToEditAnchor,
   mapCutToEditSpace,
 } from './pageChromeMap'
-import { PAGE_GAP_PX } from './PageChrome'
+import { PAGE_GAP_PX, type PageBlank } from './PageChrome'
+import { PdfPages } from './PdfPages'
 import { AtsSheet } from './AtsSheet'
 import { SkimHeatmap, SkimPill } from './SkimHeatmap'
 import { CanvasReorder } from './CanvasReorder'
@@ -114,13 +117,27 @@ function BlankCanvasTip({ doc }: { doc: ResumeDocument }) {
       return false
     }
   })
+  // One voice at a time on a first visit: the tip waits until the tour's
+  // invite has been answered (EditorTour finish), not beside it.
+  const [tourSettled, setTourSettled] = useState(() => {
+    try {
+      return !!localStorage.getItem('cvaurum:tour:v2')
+    } catch {
+      return true
+    }
+  })
+  useEffect(() => {
+    const on = () => setTourSettled(true)
+    window.addEventListener('cvaurum:tour-settled', on)
+    return () => window.removeEventListener('cvaurum:tour-settled', on)
+  }, [])
   const c = doc.content
   const blank =
     !c.basics.name &&
     !c.basics.summary &&
     !c.work.some((w) => w.position || w.name) &&
     !c.education.some((e) => e.institution || e.area)
-  if (dismissed || !blank) return null
+  if (dismissed || !blank || !tourSettled) return null
   const close = () => {
     setDismissed(true)
     try {
@@ -132,10 +149,10 @@ function BlankCanvasTip({ doc }: { doc: ResumeDocument }) {
   return (
     <div className="flex justify-center px-6 pt-5">
       <div className="flex w-full max-w-[210mm] items-start gap-2.5 rounded-xl border border-primary/25 bg-primary/5 px-3.5 py-2.5 text-xs leading-relaxed text-foreground">
-        <span aria-hidden>✍️</span>
+        <PencilLine className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
         <span className="min-w-0">
           Click any <strong>gray hint</strong> on the page to type there — only what you fill in prints. Type{' '}
-          <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">/</kbd> inside a bullet for
+          <kbd className="rounded border border-border bg-muted px-1 font-mono text-[11px]">/</kbd> inside a bullet for
           quick inserts, and hover a section for its <strong>Style</strong> button.
         </span>
         <button className="btn-icon h-6 w-6 shrink-0" onClick={close} aria-label="Dismiss tip" title="Got it">
@@ -215,6 +232,18 @@ function snapClearOfInk(y: number, root: HTMLElement, scale: number): number | n
   return bestDist <= MAX_NUDGE ? best : null
 }
 
+/** What a pinned break moved to the next page, in the words the page uses:
+ *  the entry's own title where the pin is on one, else the section's name. */
+function pinLabel(doc: ResumeDocument, pin: PageBreakPin): string {
+  const section = sectionLabel(pin.section, doc)
+  if (!pin.itemId) return section
+  const it = findItem(doc.content, pin.section, pin.itemId)?.item as Record<string, unknown> | undefined
+  const title = ['position', 'name', 'institution', 'title', 'organization', 'language'].map((k) => it?.[k]).find(
+    (v): v is string => typeof v === 'string' && v.trim().length > 0
+  )
+  return title ? htmlToText(title) : section
+}
+
 export function ResumePreview({ doc }: { doc: ResumeDocument }) {
   const zoom = useEditorStore((s) => s.zoom)
   const fitToWidth = useEditorStore((s) => s.autoFit)
@@ -232,6 +261,10 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
   // that reaches 300%, not a page that cannot be touched. Only the Preview
   // mode shows the print render, on any device.
   const exactCanvas = previewExact
+  // Preview shows the PDF's own pages (PdfPages.tsx). Browser automation keeps
+  // the continuous print layout: the export harnesses screenshot and measure
+  // that DOM, which is what the PDF is cut from.
+  const pdfPages = exactCanvas && typeof navigator !== 'undefined' && !navigator.webdriver
   const focusMode = useEditorStore((s) => s.focusMode)
   const skimView = useEditorStore((s) => s.skimView)
   const updateContent = useResumeStore((s) => s.updateContent)
@@ -249,6 +282,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
     [doc.metadata.layout.main, doc.metadata.layout.aside]
   )
   const addStandard = (key: string) => {
+    useEditorStore.getState().markFresh(key)
     updateMetadata((m) => {
       if (!m.layout.main.includes(key) && !m.layout.aside.includes(key)) m.layout.main.push(key)
       m.layout.hidden = m.layout.hidden.filter((k) => k !== key)
@@ -257,6 +291,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
   }
   const addCustom = (name?: string) => {
     const id = uid()
+    useEditorStore.getState().markFresh(customKey(id))
     updateDoc((d) => {
       d.content.custom.push({ id, name: name || 'Custom Section', items: [] })
       d.metadata.layout.main.push(customKey(id))
@@ -265,6 +300,10 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
   }
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const root = scrollRef.current
+    return root ? watchOptionalReveal(root) : undefined
+  }, [])
   const innerRef = useRef<HTMLDivElement>(null)
   // Off-screen print-mode render (NO edit chrome, empty sections excluded) — its
   // height is the TRUE printable height the PDF paginates, so fit + page count
@@ -341,7 +380,8 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
         fitRulesOf(candidate.metadata)
       )
       const r = root()
-      const m = r ? measurePages(r, ph, marginMm) : { pages: Number.POSITIVE_INFINITY, lastPageFill: 0, lastPageSections: [] }
+      const pins = candidate.metadata.page.autoFit ? [] : candidate.metadata.page.breaks
+      const m = r ? measurePages(r, ph, marginMm, pins) : { pages: Number.POSITIVE_INFINITY, lastPageFill: 0, lastPageSections: [] }
       setTrialDoc(null)
       return { fit, pages: m.pages, lastPageFill: m.lastPageFill, lastPageSections: m.lastPageSections }
     }
@@ -361,6 +401,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
   const fitResultLive = useEditorStore((s) => s.fitResult)
   const setFitOffers = useEditorStore((s) => s.setFitOffers)
   const setFitSuggesting = useEditorStore((s) => s.setFitSuggesting)
+  const setFitShort = useEditorStore((s) => s.setFitShort)
   const suggestReq = useRef(0)
   useEffect(() => {
     const myReq = ++suggestReq.current
@@ -371,6 +412,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
     const needOff = !autoFit && !!r && r.pages > 1 && r.lastPageFill < 0.35
     if (!need && !needOff) {
       setFitOffers([])
+      setFitShort(null)
       setFitSuggesting(false)
       return
     }
@@ -380,7 +422,11 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
       setFitSuggesting(true)
       try {
         const offers = need ? await suggestFits(doc, trial, r!) : [await suggestFitOn(doc, trial, r!)].filter((o) => o !== null)
-        if (myReq === suggestReq.current) setFitOffers(offers)
+        const short = need ? await explainShort(doc, trial, r!) : null
+        if (myReq === suggestReq.current) {
+          setFitOffers(offers)
+          setFitShort(short)
+        }
       } catch {
         if (myReq === suggestReq.current) setFitOffers([])
       } finally {
@@ -388,7 +434,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
       }
     }, 1200)
     return () => clearTimeout(id)
-  }, [fitResultLive, doc, autoFit, setFitOffers, setFitSuggesting])
+  }, [fitResultLive, doc, autoFit, setFitOffers, setFitSuggesting, setFitShort])
 
   // The live contrast check (src/lib/a11y). It reads the PRINT tree, the DOM
   // the export is painted from, rather than the canvas: the canvas carries
@@ -616,8 +662,10 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
   const [pageFeet, setPageFeet] = useState<PageFootCopy[]>([])
   const [sheetLook, setSheetLook] = useState<PageSheetLook | null>(null)
   const [pageRects, setPageRects] = useState<{ top: number; bottom: number }[]>([])
+  const [pageBlanks, setPageBlanks] = useState<PageBlank[]>([])
   useEffect(() => {
     const clearOverlay = () => {
+      setPageBlanks((prev) => (prev.length ? [] : prev))
       setFootLook((prev) => (prev ? null : prev))
       setPageFeet((prev) => (prev.length ? [] : prev))
       setSheetLook((prev) => (prev ? null : prev))
@@ -626,7 +674,10 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
       setPageBadgeTops((prev) => (prev.length ? [] : prev))
       setPagePageCount((prev) => (prev !== 1 ? 1 : prev))
       // close any real page gaps the last run opened
-      innerRef.current?.querySelectorAll('[data-page-start]').forEach((el) => el.removeAttribute('data-page-start'))
+      innerRef.current?.querySelectorAll<HTMLElement>('[data-page-start]').forEach((el) => {
+        el.removeAttribute('data-page-start')
+        el.style.removeProperty('--rm-gap-slack')
+      })
     }
     // 2026-08-17 spec 1b/2: the overlay now renders in EVERY canvas state
     // that genuinely paginates — auto-fit docs whose fit FAILED (fitScale
@@ -653,7 +704,12 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
       // `exceedsOnePage` is the export's own gate (render.tsx), shared here
       // so the two can never independently re-derive (and diverge on) this
       // arithmetic again.
-      if (!exceedsOnePage(contentHeightPx, pageH, onePageMarginMm(doc.metadata))) {
+      // A pin can force a second page onto a résumé that fits on one, and the
+      // export prints it (render.tsx); this gate returned before pins were
+      // read, so the canvas and the chip said one page while the PDF had two
+      // (2026-10-24). With pins in play, pagination below decides.
+      const pinsInPlay = !autoFit && doc.metadata.page.breaks.length > 0
+      if (!pinsInPlay && !exceedsOnePage(contentHeightPx, pageH, onePageMarginMm(doc.metadata))) {
         clearOverlay()
         setFitResult({ fit: fitRef.current, pages: 1, lastPageFill: contentHeightPx / pageH, lastPageSections: [] })
         return
@@ -663,6 +719,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
         // (walk.ts / sectionKeep.ts): without it this overlay would draw cuts
         // inside sections and entries the export holds whole.
         preparePrintTree(printRoot)
+        const forcedPins = autoFit ? [] : resolveForcedPins(printRoot, doc.metadata.page.breaks)
         const combinedBlocks = extractPageBlocks(printRoot, usablePageHeightPx)
         const result = paginate({
           blocks: combinedBlocks,
@@ -675,7 +732,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
           // Pins resolve on the SAME portal geometry the export resolves its
           // sheet with — parity by construction. Auto-fit ON ignores pins
           // (spec 1b), matching render.tsx exactly.
-          forcedCutsPx: autoFit ? [] : resolveForcedCutsPx(printRoot, doc.metadata.page.breaks),
+          forcedCutsPx: forcedPins.map((p) => p.y),
         })
         // The readout's numbers: the fit the portal is drawn at, the true page
         // count, and how much of the last page the content reaches.
@@ -689,6 +746,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
           lastPageSections: sectionsFromY(printRoot, result.cutsPx.length ? result.cutsPx[result.cutsPx.length - 1] : 0),
         })
         if (result.cutsPx.length === 0) {
+          clearOverlay()
           setPageSeparators([])
           setPageBadgeTops([0])
           setPagePageCount(result.pageCount)
@@ -738,6 +796,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
           anchors[i] ? null : mapCutToEditSpace(mappingBlocks, y, printRoot, printAnchors, editRoot, editAnchorsByKey)
         )
         for (const el of editRoot.querySelectorAll('[data-page-start]')) el.removeAttribute('data-page-start')
+        const pinAt = result.cutsPx.map((cut) => forcedPins.find((p) => Math.abs(p.y - cut) < 0.5)?.pin)
         // The paper either side of each gap: the page's bottom margin, then
         // the next page's top margin, as the export leaves them.
         const paperBelow = padding.topPx
@@ -765,6 +824,29 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
             // the design draws on every page - known only where every break
             // opened a real gap; one it had to guess leaves them export-only.
             const rects: { top: number; bottom: number }[] = []
+            const blanks: PageBlank[] = []
+            // The paper a page leaves blank under its last line: each gap
+            // grows until the page above it is one sheet tall, so a canvas
+            // page is the height of the printed one. Without it a "Start on
+            // new page" left half a page empty in the PDF and none on the
+            // canvas (2026-10-24). Measured here, on the canvas, because the
+            // canvas page also carries edit-only rows the print tree has not.
+            // Single column only: two columns open their gap in the main
+            // column alone, and half a page of it would slide the sidebar
+            // out of line.
+            //
+            // The gaps already grown stay where they are while this measures:
+            // the natural place of each break is its measured place less the
+            // slack currently above and in it (`had`), and every new value is
+            // written only after the last read. Clearing the gaps to measure
+            // shortened the canvas, the scroller pulled its scroll position
+            // up to fit, and every rect read after that was off by the slack
+            // cleared - so alternate runs saw no need for any and the page
+            // "danced" between two layouts for ever (2026-10-26, after a
+            // delete near the foot of a long résumé).
+            const writes: [HTMLElement, number][] = []
+            let had = 0
+            let shift = 0
             let pageTop = 0
             let exact = true
             for (let i = 0; i < result.cutsPx.length; i++) {
@@ -772,11 +854,29 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
               if (el) {
                 // `grey` is where the gap's grey ends and the next page's paper
                 // begins; the page's own margin runs down from there.
-                const grey = (el.getBoundingClientRect().top - rootRect.top) / scaleNow - paperBelow
+                const cur = parseFloat((el as HTMLElement).style.getPropertyValue('--rm-gap-slack')) || 0
+                had += cur
+                let grey = (el.getBoundingClientRect().top - rootRect.top) / scaleNow - paperBelow - had + shift
+                                const slack = mainOnlyBlocks ? 0 : Math.max(0, Math.round(pageH - (grey - PAGE_GAP_PX - pageTop)))
+                if (slack !== cur) writes.push([el as HTMLElement, slack])
+                grey += slack
+                shift += slack
                 separators.push({ y: grey - PAGE_GAP_PX / 2 })
                 badgeTops.push(grey)
                 if (look) feet.push({ page: i + 1, top: grey - PAGE_GAP_PX - look.insetPx - look.heightPx })
                 rects.push({ top: pageTop, bottom: grey - PAGE_GAP_PX })
+                // A pinned break's blank paper is marked and named, with the
+                // way to undo it; a natural break's leftover is plain paper.
+                const pin = pinAt[i]
+                if (pin && slack >= 24) {
+                  blanks.push({
+                    page: i + 1,
+                    top: grey - PAGE_GAP_PX - padding.bottomPx - slack,
+                    height: slack,
+                    pin,
+                    label: pinLabel(doc, pin),
+                  })
+                }
                 pageTop = grey
               } else if (fallbackYs[i] != null) {
                 // Interpolated, so it can land in the MIDDLE of a chip or a
@@ -788,14 +888,24 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
                 // judgement this module already makes when it suppresses a
                 // separator it cannot place.
                 exact = false
-                const snapped = snapClearOfInk(fallbackYs[i]!, editRoot, scaleNow)
+                const snapped = snapClearOfInk(fallbackYs[i]! - had + shift, editRoot, scaleNow)
                 // The badge marks the page whether or not a rule can be drawn.
                 if (snapped !== null) separators.push({ y: snapped, thin: true })
-                badgeTops.push(snapped ?? fallbackYs[i]!)
+                badgeTops.push(snapped ?? fallbackYs[i]! - had + shift)
               } else {
                 exact = false
-                badgeTops.push(result.cutsPx[i] * badgeScale)
+                badgeTops.push(result.cutsPx[i] * badgeScale - had + shift)
               }
+            }
+            // Gaps left on elements that no longer open a page are inert (the
+            // margin needs [data-page-start]) but would come back with stale
+            // values; drop them, then write the new ones - reads are done.
+            for (const old of editRoot.querySelectorAll<HTMLElement>('[style*="--rm-gap-slack"]')) {
+              if (!old.hasAttribute('data-page-start')) old.style.removeProperty('--rm-gap-slack')
+            }
+            for (const [el, v] of writes) {
+              if (v > 0) el.style.setProperty('--rm-gap-slack', `${v}px`)
+              else el.style.removeProperty('--rm-gap-slack')
             }
             rects.push({ top: pageTop, bottom: editRoot.offsetHeight })
             if (look) feet.push({ page: result.pageCount, top: editRoot.offsetHeight - look.insetPx - look.heightPx })
@@ -806,6 +916,7 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
             setPageFeet(feet)
             setSheetLook(exact ? readPageSheet(editRoot, scaleNow) : null)
             setPageRects(exact ? rects : [])
+            setPageBlanks(blanks)
             // The margin gaps grew the canvas — keep the white sheet sized.
             if (innerRef.current) setContentH(innerRef.current.scrollHeight)
           })
@@ -955,9 +1066,18 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
           // In the page's own flow, a row above the sheet: it scrolls away with
           // the page instead of riding over it (sticky, it covered the name on a
           // phone and sat on whatever scrolled under it; reported 2026-09-12).
-          <div data-tour="checks" className="flex flex-wrap justify-end gap-2 px-3 pb-2 pt-3">
-            <ContrastChip />
-            <FitChip doc={doc} />
+          // One strip, not three pills: what the page's reading and fitting
+          // checks say is one statement about the page, and three bordered
+          // pills read as three alerts (and wrapped onto two rows on a phone).
+          <div data-tour="checks" className="flex justify-end px-3 pb-2 pt-3">
+            <div
+              role="group"
+              aria-label="Page checks"
+              className="flex max-w-full items-stretch divide-x divide-border overflow-hidden rounded-full border border-border bg-surface/95 shadow-float backdrop-blur"
+            >
+              <ContrastChip />
+              <FitChip doc={doc} />
+            </div>
           </div>
         )}
         {/* skim-heat status pill — floats over the canvas while the heat is on */}
@@ -991,6 +1111,10 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
           either edge, and `min-w-full` keeps the sheet centered whenever the
           canvas is the wider one. */}
         <div className="flex min-h-full w-max min-w-full justify-center px-6 py-8">
+          {pdfPages ? (
+            <PdfPages doc={doc} zoom={effectiveZoom} />
+          ) : (
+          <>
           {/* reserves scaled space */}
           <div style={{ width: pageW * effectiveZoom, height: sheetH * effectiveZoom }}>
             <div
@@ -1050,9 +1174,12 @@ export function ResumePreview({ doc }: { doc: ResumeDocument }) {
                 feet={pageFeet}
                 sheetLook={exactCanvas ? null : sheetLook}
                 pageRects={pageRects}
+                blanks={exactCanvas ? [] : pageBlanks}
               />
             </div>
           </div>
+          </>
+          )}
         </div>
         {/* The canvas's own zoom, at the foot of the scrollport: a finger-driven
             screen has no bar cluster, and neither does a bar under 768px. It

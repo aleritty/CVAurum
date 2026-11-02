@@ -6,11 +6,13 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { isMac, rankCommands, shortcutLabel } from '@/lib/paletteRank'
+import { switchTemplate } from './TemplateGallery'
 import { Command, CornerDownLeft } from 'lucide-react'
 import type { ResumeDocument } from '@/types/document'
 import { TEMPLATES } from '@/templates/registry'
 import { FONTS } from '@/data/fonts'
-import { BODY_SECTION_KEYS, DEFAULT_LABELS } from '@/lib/sections'
+import { ADD_LABEL, BODY_SECTION_KEYS, DEFAULT_LABELS, pushNewItem, sectionLabel } from '@/lib/sections'
 import { useResumeStore } from '@/store/useResumeStore'
 import { useEditorStore } from '@/store/useEditorStore'
 import { useAppStore } from '@/store/useAppStore'
@@ -38,24 +40,42 @@ const ACCENTS: { name: string; hex: string }[] = [
   { name: 'Ink', hex: '#0f172a' },
 ]
 
-/** Subsequence fuzzy score: smaller is better; null = no match. Gaps between
- *  matched letters cost 4× a late start, so a CONTIGUOUS "skim" deep in a label
- *  always beats scattered s…k…i…m letters near the front. */
-function fuzzy(query: string, target: string): number | null {
-  const q = query.toLowerCase().replace(/\s+/g, '')
-  const t = target.toLowerCase()
-  if (!q) return t.length
-  let qi = 0
-  let score = 0
-  let last = -1
-  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
-    if (t[ti] === q[qi]) {
-      score += last >= 0 ? (ti - last - 1) * 4 : ti // gap cost ≫ late-start cost
-      last = ti
-      qi++
-    }
+const RECENT_KEY = 'cvaurum:palette-recent'
+
+/** The ids of the last commands run here, newest first. */
+function readRecent(): string[] {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_KEY) || '[]') as string[]
+  } catch {
+    return []
   }
-  return qi === q.length ? score : null
+}
+function rememberRecent(id: string) {
+  try {
+    const next = [id, ...readRecent().filter((r) => r !== id)].slice(0, 5)
+    localStorage.setItem(RECENT_KEY, JSON.stringify(next))
+  } catch {
+    /* private mode */
+  }
+}
+
+/** Scroll the canvas to a section and put the caret in its first field, or
+ *  in the first field of its last entry (the one an "Add" just appended).
+ *  Waits two frames: the mode switch and the new entry both render first. */
+function reachSection(key: string, where: 'first' | 'last') {
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const sec = document.querySelector<HTMLElement>(`[data-tour="canvas"] [data-section="${key}"]`)
+    if (!sec) return
+    const fields = [...sec.querySelectorAll<HTMLElement>('[contenteditable="true"]')]
+    let target = fields[0]
+    if (where === 'last') {
+      const entries = sec.querySelectorAll<HTMLElement>('[data-item-id]')
+      const last = entries[entries.length - 1]
+      target = last?.querySelector<HTMLElement>('[contenteditable="true"]') ?? fields[fields.length - 1]
+    }
+    sec.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    target?.focus({ preventScroll: true })
+  }))
 }
 
 export function CommandPalette({ doc }: { doc: ResumeDocument }) {
@@ -111,8 +131,8 @@ export function CommandPalette({ doc }: { doc: ResumeDocument }) {
       { id: 'panel-design', group: 'View', label: 'Open Design panel', run: () => { ed.setLeftTab('design'); ed.setLeftOpen(true) } },
       { id: 'magic-fit-suggest', group: 'View', label: 'Magic fit: suggest', hint: 'measure a few moves that fit better', run: () => { ed.setLeftTab('design'); ed.setLeftOpen(true); setTimeout(() => window.dispatchEvent(new Event('cvaurum:magic-fit-suggest')), 60) } },
       { id: 'panel-templates', group: 'View', label: 'Open Templates panel', run: () => { ed.setLeftTab('templates'); ed.setLeftOpen(true) } },
-      { id: 'panel-ats', group: 'View', label: 'Open ATS & Tailoring panel', run: () => { ed.setLeftTab('ats'); ed.setLeftOpen(true) } },
-      { id: 'semantic', group: 'View', label: 'Semantic JD match', hint: 'meaning-level match — in the ATS panel', run: () => { ed.setLeftTab('ats'); ed.setLeftOpen(true) } },
+      { id: 'panel-ats', group: 'View', label: 'Open score & job match', hint: 'ATS score, keywords', run: () => { ed.setLeftTab('ats'); ed.setLeftOpen(true) } },
+      { id: 'semantic', group: 'View', label: 'Semantic JD match', hint: 'meaning-level match, in Score', run: () => { ed.setLeftTab('ats'); ed.setLeftOpen(true) } },
       { id: 'tour', group: 'View', label: 'Show the quick tour', run: () => window.dispatchEvent(new Event('cvaurum:open-tour')) },
     )
 
@@ -133,8 +153,8 @@ export function CommandPalette({ doc }: { doc: ResumeDocument }) {
 
     // undo / redo
     cmds.push(
-      { id: 'undo', group: 'Edit', label: 'Undo', hint: 'Ctrl+Z', run: () => useResumeStore.temporal.getState().undo() },
-      { id: 'redo', group: 'Edit', label: 'Redo', hint: 'Ctrl+Shift+Z', run: () => useResumeStore.temporal.getState().redo() },
+      { id: 'undo', group: 'Edit', label: 'Undo', hint: shortcutLabel('Ctrl+Z', isMac()), run: () => useResumeStore.temporal.getState().undo() },
+      { id: 'redo', group: 'Edit', label: 'Redo', hint: shortcutLabel('Ctrl+Shift+Z', isMac()), run: () => useResumeStore.temporal.getState().redo() },
     )
 
     // templates
@@ -144,10 +164,7 @@ export function CommandPalette({ doc }: { doc: ResumeDocument }) {
         group: 'Template',
         label: `Template: ${tpl.name}`,
         hint: tpl.description,
-        run: () => {
-          applyTemplate(tpl.defaults)
-          toast(`Switched to ${tpl.name}`, 'success')
-        },
+        run: () => switchTemplate(tpl, applyTemplate, toast),
       })
     }
 
@@ -174,6 +191,34 @@ export function CommandPalette({ doc }: { doc: ResumeDocument }) {
     }
 
     // add sections (only ones not already on the resume)
+    // sections on the page: jump to one, or add an entry to it. Both land
+    // the caret in the section, so the palette is a way to reach a field,
+    // not only a list of switches.
+    const onPage = [...doc.metadata.layout.main, ...doc.metadata.layout.aside].filter((k) => !doc.metadata.layout.hidden.includes(k))
+    for (const key of onPage) {
+      const name = sectionLabel(key, doc)
+      cmds.push({
+        id: `goto-${key}`,
+        group: 'Go to',
+        label: `Go to ${name}`,
+        run: () => { ed.setPreviewExact(false); ed.setAtsView(false); ed.markFresh(key); reachSection(key, 'first') },
+      })
+      if (key === 'summary') continue
+      const entry = ADD_LABEL[key] ?? 'entry'
+      cmds.push({
+        id: `add-entry-${key}`,
+        group: 'Add',
+        label: `Add ${entry} to ${name}`,
+        run: () => {
+          // An empty section can be held off the page (Empty sections:
+          // Auto); marked fresh it shows, so the new entry has a place.
+          ed.setPreviewExact(false); ed.setAtsView(false); ed.markFresh(key)
+          useResumeStore.getState().updateContent((c) => pushNewItem(c, key))
+          reachSection(key, 'last')
+        },
+      })
+    }
+
     const present = new Set([...doc.metadata.layout.main, ...doc.metadata.layout.aside])
     for (const key of BODY_SECTION_KEYS.filter((k) => !present.has(k))) {
       cmds.push({
@@ -185,6 +230,7 @@ export function CommandPalette({ doc }: { doc: ResumeDocument }) {
             if (!m.layout.main.includes(key) && !m.layout.aside.includes(key)) m.layout.main.push(key)
             m.layout.hidden = m.layout.hidden.filter((k) => k !== key)
           })
+          ed.markFresh(key)
           toast(`${DEFAULT_LABELS[key] ?? key} added`, 'success')
         },
       })
@@ -205,13 +251,9 @@ export function CommandPalette({ doc }: { doc: ResumeDocument }) {
     return cmds
   }, [doc])
 
-  const results = useMemo(() => {
-    const scored = commands
-      .map((c) => ({ c, s: fuzzy(query, c.label + ' ' + (c.hint ?? '')) }))
-      .filter((x): x is { c: Cmd; s: number } => x.s !== null)
-      .sort((a, b) => a.s - b.s)
-    return scored.slice(0, 12).map((x) => x.c)
-  }, [commands, query])
+  // Opens on what was used last and the actions people come here for; a
+  // query ranks word-start matches first (src/lib/paletteRank.ts).
+  const results = useMemo(() => rankCommands(commands, query, readRecent()), [commands, query])
 
   useEffect(() => setSel(0), [query])
 
@@ -219,6 +261,7 @@ export function CommandPalette({ doc }: { doc: ResumeDocument }) {
     const cmd = results[i]
     if (!cmd) return
     setOpen(false)
+    rememberRecent(cmd.id)
     cmd.run()
   }
 
@@ -238,17 +281,26 @@ export function CommandPalette({ doc }: { doc: ResumeDocument }) {
               if (e.key === 'ArrowUp') { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)) }
               if (e.key === 'Enter') { e.preventDefault(); runSel(sel) }
             }}
-            placeholder="Type a command — template, font, accent, section, export…"
+            placeholder="Type a command or a section — template, font, accent, export…"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="palette-list"
+            aria-activedescendant={results[sel] ? `palette-opt-${sel}` : undefined}
+            aria-autocomplete="list"
             className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             aria-label="Search commands"
           />
-          <kbd className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">Esc</kbd>
+          <kbd className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground">Esc</kbd>
         </div>
-        <div ref={listRef} className="max-h-[46vh] overflow-y-auto overscroll-contain p-1.5">
+        <div ref={listRef} id="palette-list" role="listbox" aria-label="Commands" className="max-h-[46vh] overflow-y-auto overscroll-contain p-1.5">
           {results.length === 0 && <div className="px-3 py-6 text-center text-sm text-muted-foreground">No matching command.</div>}
           {results.map((c, i) => (
             <button
               key={c.id}
+              id={`palette-opt-${i}`}
+              role="option"
+              aria-selected={i === sel}
+              tabIndex={-1}
               className={`flex min-h-[40px] w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition ${i === sel ? 'bg-primary/10 text-foreground' : 'text-foreground hover:bg-muted/60'}`}
               // mouseMOVE, not mouseenter: when the list re-renders under a
               // stationary cursor, mouseenter fires and silently steals the
@@ -257,7 +309,7 @@ export function CommandPalette({ doc }: { doc: ResumeDocument }) {
               onClick={() => runSel(i)}
             >
               <span className="flex min-w-0 items-center gap-2.5">
-                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{c.group}</span>
+                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{c.group}</span>
                 <span className="truncate">{c.label}</span>
               </span>
               <span className="flex shrink-0 items-center gap-2">

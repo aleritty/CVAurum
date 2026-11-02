@@ -11,7 +11,7 @@
  * Rich fields (bullets, summary) also get the same "/" quick-insert menu as
  * the panel editor — type "/" at a word start for verbs, metric templates, etc.
  */
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { FormatBar } from './FormatBar'
 import type { ResumeContent } from '@/types/document'
@@ -21,6 +21,7 @@ import { filterSlash, type Slash } from '@/lib/slashCommands'
 import { RichText } from './atoms'
 import { keywordChunks } from '@/lib/keywordChunks'
 import { splitPastedLines } from '@/lib/pasteLines'
+import { fieldName } from './fieldName'
 
 export type EditFn = (recipe: (c: ResumeContent) => void) => void
 /** Mutate document metadata (layout/typography/theme) from the canvas. */
@@ -45,6 +46,13 @@ interface EditableProps {
   spellCheck?: boolean
   /** bullet fields: a paste of two or more lines becomes that many bullets (the parent inserts them) */
   onPasteLines?: (lines: string[]) => void
+  /** A field nobody has to fill (a role overview, a summary under an award):
+   *  left empty, the canvas shows it only inside the entry being worked on,
+   *  so at rest the page reads as it prints. */
+  optional?: boolean
+  /** The field's name when its placeholder is an example value
+   *  ("email@example.com" is read as "Email"). */
+  label?: string
 }
 
 interface SlashMenu {
@@ -82,14 +90,36 @@ function detectSlash(root: HTMLElement): Omit<SlashMenu, 'items' | 'index'> & { 
   }
 }
 
-function Editable({ value, onChange, rich, multiline, onEnter, as = 'span', className, placeholder, spellCheck = true, onPasteLines }: EditableProps) {
+function Editable({ value, onChange, rich, multiline, onEnter, as = 'span', className, placeholder, spellCheck = true, onPasteLines, optional, label }: EditableProps) {
   const ref = useRef<HTMLElement | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  // What the field held when it was entered: Escape puts it back.
+  const atFocus = useRef<string | null>(null)
   // "/" quick-insert menu (rich fields only). Kept in a ref too so the keydown
   // handler always sees the current state without re-binding.
   const [menu, setMenu] = useState<SlashMenu | null>(null)
   const menuRef = useRef<SlashMenu | null>(null)
   menuRef.current = menu
+
+  // The field's spoken name carries its entry and section (see fieldName).
+  // Read from the page after every render: a heading renamed or an entry
+  // retitled re-renders the canvas, and these fields with it.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const sectionEl = el.closest('[data-section]')
+    const section = sectionEl?.querySelector('.rm-section-title-text')?.textContent
+    const entryEl = el.closest('.rm-item, .rm-mini')
+    const first = entryEl?.querySelector('[role="textbox"]')
+    const entry = first && first !== el ? first.textContent : ''
+    // its kind = the same placeholder, counted inside the entry it belongs to,
+    // or across the section for an entry's own first field
+    const scope = first && first !== el ? entryEl : sectionEl
+    const kin = scope ? [...scope.querySelectorAll('[role="textbox"]')].filter((f) => f.getAttribute('data-placeholder') === (placeholder ?? null)) : []
+    const position = kin.length > 1 ? { n: kin.indexOf(el) + 1, of: kin.length } : undefined
+    const name = fieldName({ placeholder: label ?? placeholder, fallback: el.closest('li') ? 'Bullet' : undefined, section, entry, position })
+    if (el.getAttribute('aria-label') !== name) el.setAttribute('aria-label', name)
+  })
 
   // Sync external value into the DOM, but never while the user is editing it.
   useEffect(() => {
@@ -190,10 +220,28 @@ function Editable({ value, onChange, rich, multiline, onEnter, as = 'span', clas
       if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applySlash(m.items[m.index]); return }
       if (e.key === 'Escape') { e.preventDefault(); setMenu(null); return }
     }
-    // Escape commits and leaves the field (keyboard users need a way out).
+    // Escape takes back what was typed since the field was entered. It used to
+    // keep the edit (a heading renamed by mistake stayed renamed, critique
+    // 2026-10-23), then it left the field as well - which dropped keyboard
+    // focus to the page, so a screen-reader user lost their place on every
+    // undo (critique round 3, 2026-10-24). It now stays: the text is put back,
+    // the caret sits at its end, and the original is written straight back
+    // in case a commit (300ms after the last keystroke) already went through.
     if (e.key === 'Escape') {
       e.preventDefault()
-      ;(e.target as HTMLElement).blur()
+      if (timer.current) clearTimeout(timer.current)
+      const el = ref.current
+      const original = atFocus.current
+      if (el && original !== null) {
+        if (rich) el.innerHTML = sanitizeHtml(original)
+        else el.textContent = original
+        if (original !== value) onChange(original)
+        const sel = window.getSelection()
+        if (sel) {
+          sel.selectAllChildren(el)
+          sel.collapseToEnd()
+        }
+      }
       return
     }
     if (e.key !== 'Enter') return
@@ -234,10 +282,15 @@ function Editable({ value, onChange, rich, multiline, onEnter, as = 'span', clas
         role="textbox"
         tabIndex={0}
         aria-label={placeholder || 'Editable field'}
+        aria-placeholder={placeholder}
         aria-multiline={rich && multiline ? true : undefined}
         data-placeholder={placeholder}
+        data-optional={optional ? '' : undefined}
         onInput={onInput}
         onBlur={onBlur}
+        onFocus={() => {
+          atFocus.current = value || ''
+        }}
         onKeyDown={onKeyDown}
         onPaste={onPaste}
         className={`rm-editable${rich ? ' rm-rich' : ''}${className ? ' ' + className : ''}`}
@@ -292,6 +345,8 @@ export function Ed({
   spellCheck,
   chunk,
   onPasteLines,
+  optional,
+  label,
 }: {
   edit?: EditFn
   value: string
@@ -307,6 +362,10 @@ export function Ed({
   chunk?: boolean
   /** bullet fields: a paste of two or more lines becomes that many bullets */
   onPasteLines?: (lines: string[]) => void
+  /** See EditableProps.optional. */
+  optional?: boolean
+  /** See EditableProps.label. */
+  label?: string
 }) {
   if (!edit) {
     if (rich) return <RichText html={value} className={className} />
@@ -345,6 +404,8 @@ export function Ed({
       placeholder={placeholder}
       spellCheck={spellCheck}
       onPasteLines={onPasteLines}
+      optional={optional}
+      label={label}
       onChange={(v) => edit((c) => apply(c, v))}
     />
   )

@@ -1,3 +1,4 @@
+import { useEditorStore } from '@/store/useEditorStore'
 import { createPortal } from 'react-dom'
 import { useState, useEffect } from 'react'
 import { ChevronUp,
@@ -25,8 +26,10 @@ import {
   moveSectionTo,
   nextSectionPlace,
   sectionLabel,
+  type EmptySectionsPref,
   type SectionPlace,
 } from '@/lib/sections'
+import { Segmented } from './fields/Controls'
 import { sectionIconFor } from '@/components/icons/sectionIcons'
 import { SectionBoard } from './SectionBoard'
 import { SectionItemsEditor } from './SectionItemEditors'
@@ -76,12 +79,15 @@ export function SectionsOrganizer({ doc }: { doc: ResumeDocument }) {
       m.layout.aside = aside
       m.layout.footer = footer
     })
-  const toggleHidden = (key: string) =>
+  const toggleHidden = (key: string) => {
+    // shown again: it stays on the canvas even while empty
+    if (layout.hidden.includes(key)) useEditorStore.getState().markFresh(key)
     updateMetadata((m) => {
       const set = new Set(m.layout.hidden)
       set.has(key) ? set.delete(key) : set.add(key)
       m.layout.hidden = [...set]
     })
+  }
   // The move menu cycles the places a section can live: main, sidebar,
   // footer strip and back on two columns; main, footer strip and back on
   // one. The same helper the canvas gear and its drag use, so a move here
@@ -124,6 +130,7 @@ export function SectionsOrganizer({ doc }: { doc: ResumeDocument }) {
     }
   }
   const addStandard = (key: string) => {
+    useEditorStore.getState().markFresh(key)
     updateMetadata((m) => {
       // A section the footer strip already holds stays there.
       if (!m.layout.main.includes(key) && !m.layout.aside.includes(key) && !m.layout.footer.includes(key))
@@ -135,6 +142,7 @@ export function SectionsOrganizer({ doc }: { doc: ResumeDocument }) {
   }
   const addCustom = (name?: string) => {
     const id = uid()
+    useEditorStore.getState().markFresh(customKey(id))
     updateDoc((d) => {
       d.content.custom.push({ id, name: name || 'Custom Section', items: [] })
       d.metadata.layout.main.push(customKey(id))
@@ -178,16 +186,19 @@ export function SectionsOrganizer({ doc }: { doc: ResumeDocument }) {
         twoCol={twoCol}
         onChange={setColumns}
         renderCard={renderCard}
+        beforeFooter={
+          <button className="btn-outline btn-sm w-full border-dashed" onClick={() => setAddOpen(true)}>
+            <Plus className="h-4 w-4" /> Add section
+          </button>
+        }
       />
-      <p className="text-[11px] text-muted-foreground/80">
-        {twoCol
-          ? 'Drag a section across the zones to move it between the main flow, the sidebar and the footer strip.'
-          : 'Drag a section into the footer strip to print it as a compact band at the foot of the page.'}
-      </p>
+      {twoCol && (
+        <p className="text-[11px] text-muted-foreground">
+          Drag a section between the main column, the sidebar and the footer strip, or use its ⋯ menu.
+        </p>
+      )}
 
-      <button className="btn-outline btn-sm w-full border-dashed" onClick={() => setAddOpen(true)}>
-        <Plus className="h-4 w-4" /> Add section
-      </button>
+      <EmptySectionsChoice />
 
       {addOpen && (
         <SectionGallery
@@ -260,7 +271,7 @@ function SectionCard({
       <div className="flex items-center gap-1 px-1.5 py-1.5">
         <button
           type="button"
-          className="cursor-grab touch-none text-muted-foreground/50 hover:text-muted-foreground active:cursor-grabbing"
+          className="cursor-grab touch-none text-muted-foreground/50 hover:text-muted-foreground active:cursor-grabbing coarse:-m-2.5 coarse:p-2.5"
           {...handle.attributes}
           {...handle.listeners}
           aria-label="Drag to reorder"
@@ -284,7 +295,7 @@ function SectionCard({
         ) : (
           <button type="button" className="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-1 text-left hover:bg-muted/50" onClick={onToggle}>
             <span className="truncate text-sm font-medium">{label}</span>
-            {count > 0 && <span className="rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground">{count}</span>}
+            {count > 0 && <span className="rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground">{count}</span>}
           </button>
         )}
         <button type="button" className="btn-icon h-9 w-9 md:h-7 md:w-7" onClick={onHide} title={hidden ? 'Show section' : 'Hide section'}>
@@ -373,6 +384,35 @@ function SectionCard({
           <SectionItemsEditor doc={doc} sectionKey={sectionKey} />
         </div>
       )}
+    </div>
+  )
+}
+
+/** Whether the page you edit shows the sections that hold nothing yet
+ *  (lib/sections emptySectionsShown). Kept in this browser, not the résumé:
+ *  it changes what you see while editing, never what prints. */
+function EmptySectionsChoice() {
+  const pref = useEditorStore((s) => s.emptySections)
+  const setPref = useEditorStore((s) => s.setEmptySections)
+  return (
+    <div className="space-y-1.5 border-t border-border pt-3">
+      <label className="label">Empty sections on the page</label>
+      <Segmented<EmptySectionsPref>
+        value={pref}
+        options={[
+          { value: 'auto', label: 'Auto' },
+          { value: 'show', label: 'Show' },
+          { value: 'hide', label: 'Hide' },
+        ]}
+        onChange={setPref}
+      />
+      <p className="text-[11px] leading-snug text-muted-foreground">
+        {pref === 'auto'
+          ? 'Shown while your résumé is mostly empty, then left out so the page reads like the PDF. Empty sections never print.'
+          : pref === 'show'
+            ? 'Every section is on the page, empty or not. Empty ones never print.'
+            : 'Only sections with something in them are on the page, like the PDF. Find the rest here.'}
+      </p>
     </div>
   )
 }

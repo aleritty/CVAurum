@@ -108,6 +108,22 @@ export function fitSizesPt(metadata: Metadata, fit: FitVector): FitSizesPt {
 const pt = (n: number) => `${(Math.round(n * 10) / 10).toString()}pt`
 const pct = (n: number) => `${Math.round(n * 100)}%`
 
+/** The line everyone reads, in a job seeker's words: does it fit, and was
+ *  the text made smaller. `formatFitReadout` keeps the exact sizes, one tap
+ *  away under Details. */
+export function formatFitSummary(metadata: Metadata, result: FitResult | null): string {
+  const on = metadata.page.autoFit
+  if (!result) return on ? 'Measuring…' : 'Off'
+  const pages = `${result.pages} page${result.pages === 1 ? '' : 's'}`
+  const setPt = metadata.typography.fontSize
+  if (!on) return `Off · ${pages} at your ${pt(setPt)}`
+  const body = fitSizesPt(metadata, result.fit).body
+  const t = metadata.page.fit.target
+  if (result.pages > t) return `Can't fit ${t} page${t === 1 ? '' : 's'} within your rules · ${pages} at ${pt(body)}`
+  if (body < setPt - 0.05) return `Fits ${pages} · text ${pt(body)}, a little smaller than your ${pt(setPt)}`
+  return `Fits ${pages} · text at your ${pt(setPt)}`
+}
+
 /** One sentence: what the fit did, and how the pages came out. */
 export function formatFitReadout(metadata: Metadata, result: FitResult | null): string {
   const on = metadata.page.autoFit
@@ -130,4 +146,16 @@ export function formatFitReadout(metadata: Metadata, result: FitResult | null): 
   // page instead, and they cannot decide what they are not told.
   const cramped = s.body < LEGIBLE_BODY_PT ? ` · ${pt(s.body)} is below what prints legibly — a page more would keep it readable` : ''
   return `${head}: body ${pt(s.body)}${lead}, headings ${pt(s.heading)}, name ${pt(s.name)}, gaps ${pt(s.sectionGap)} / ${pt(s.entryGap)} · ${pages}, ${fill}${short}${cramped}`
+}
+
+/**
+ * How the chip over the page words a text size the fit shrank. "Slightly
+ * smaller" was said of every shrink, 10.5pt printed at 7.6pt included
+ * (2026-10-24): the words now scale with the shrink, and a size below what
+ * prints legibly is called small and flagged.
+ */
+export function shrinkWords(body: number, set: number): { words: string; warn: boolean } {
+  if (body < LEGIBLE_BODY_PT) return { words: 'small text', warn: true }
+  if (body < set * 0.9) return { words: 'text smaller', warn: false }
+  return { words: 'text slightly smaller', warn: false }
 }

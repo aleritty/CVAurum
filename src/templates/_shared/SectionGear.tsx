@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Eye,
   Settings2,
@@ -20,7 +20,7 @@ import type { ResumeDocument } from '@/types/document'
 import type { Metadata } from '@/types/metadata'
 import { sectionLabel, moveSection, moveSectionTo } from '@/lib/sections'
 import { hasPagePin, togglePagePin } from '@/lib/pageBreakPins'
-import { HAS_DATES, HAS_ENTRY_ORG, HAS_KEYWORDS, HAS_LINK, HAS_LOCATION, STYLE_FIELDS, headingAlignLocked, keepEntriesOn, paintStyle, sectionBase } from './sectionClasses'
+import { HAS_DATES, HAS_TIMELINE, HAS_ENTRY_ORG, HAS_KEYWORDS, HAS_LINK, HAS_LOCATION, STYLE_FIELDS, headingAlignLocked, keepEntriesOn, paintStyle, sectionBase } from './sectionClasses'
 import { SECTION_NUMBER_STYLES } from './sectionNumeral'
 import { ICON_KINDS, sectionIconKind, suggestedIcons } from './sectionIconChoice'
 import { iconForKind } from '@/components/icons/sectionIcons'
@@ -508,10 +508,45 @@ export function SectionGear({
 }) {
   const [open, setOpen] = useState(false)
   // sheet=true → phone bottom-sheet; otherwise a clamped floating panel.
-  const [pos, setPos] = useState({ top: 0, left: 0, maxH: 600, sheet: false })
+  // dock=true → laid over the editor's side panel as an inspector (desktop).
+  const [pos, setPos] = useState({ top: 0, left: 0, maxH: 600, sheet: false, dock: false, width: 0 })
+  // The less-used groups (see Group's `more`), remembered across sections.
+  const [moreOpen, setMoreOpen] = useState(() => {
+    try {
+      return localStorage.getItem('cvaurum:style-more') === '1'
+    } catch {
+      return false
+    }
+  })
   const panelRef = useRef<HTMLDivElement>(null)
   // Escape closes; focus moves in on open and back to the gear on close.
-  usePopoverA11y(open, () => setOpen(false), panelRef)
+  const openerRef = useRef<HTMLElement | null>(null)
+  usePopoverA11y(open, () => setOpen(false), panelRef, openerRef)
+
+  // Docked: one inspector at a time, at the right edge with the canvas
+  // narrowed beside it; it leaves when the window is resized, and the section
+  // it styles is outlined on the page while it is open.
+  useEffect(() => {
+    if (!open || !pos.dock) return
+    const sec = document.querySelector<HTMLElement>(`[data-tour="canvas"] [data-section="${sectionKey}"]`)
+    sec?.setAttribute('data-styling', '')
+    sec?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    const other = (e: Event) => {
+      if ((e as CustomEvent).detail !== sectionKey) setOpen(false)
+    }
+    const close = () => setOpen(false)
+    document.documentElement.style.setProperty('--style-dock-w', `${pos.width}px`)
+    window.addEventListener('cvaurum:style-dock', other)
+    window.addEventListener('cvaurum:style-close', close)
+    window.addEventListener('resize', close)
+    return () => {
+      sec?.removeAttribute('data-styling')
+      document.documentElement.style.removeProperty('--style-dock-w')
+      window.removeEventListener('cvaurum:style-dock', other)
+      window.removeEventListener('cvaurum:style-close', close)
+      window.removeEventListener('resize', close)
+    }
+  }, [open, pos.dock, pos.width, sectionKey])
 
   const layout = doc.metadata.layout
   const base = sectionBase(sectionKey)
@@ -699,16 +734,37 @@ export function SectionGear({
     })
 
   const openPopover = (e: React.MouseEvent) => {
+    openerRef.current = e.currentTarget as HTMLElement
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     // clientWidth excludes the page scrollbar — innerWidth would tuck the panel
     // underneath it on Windows (the clipping users saw).
     const vw = document.documentElement.clientWidth
     const vh = window.innerHeight
     if (vw < 640) {
-      setPos({ top: 0, left: 0, maxH: Math.round(vh * 0.76), sheet: true })
+      setPos({ top: 0, left: 0, maxH: Math.round(vh * 0.76), sheet: true, dock: false, width: 0 })
       setOpen(true)
       return
     }
+    // Desktop: an inspector docked at the right edge, the canvas narrowed
+    // beside it. Floated beside the gear it had nowhere to go on a laptop -
+    // the page fills the canvas - and opened ON the section it styles
+    // (2026-10-24); docked over the left panel it took the Content panel
+    // away and sat where nobody looks for a style inspector (2026-10-26).
+    if (variant === 'canvas' && document.documentElement.getAttribute('data-layout') === 'desk') {
+      const cr = document.querySelector<HTMLElement>('[data-tour="canvas"]')?.getBoundingClientRect()
+      const width = 340
+      // room for the inspector and a page still worth reading beside it
+      if (cr && cr.width - width >= 480) {
+        window.dispatchEvent(new CustomEvent('cvaurum:style-dock', { detail: sectionKey }))
+        setPos({ top: cr.top, left: vw - width, maxH: vh - cr.top, sheet: false, dock: true, width })
+        setOpen(true)
+        return
+      }
+    }
+    floatBeside(r, vw, vh)
+  }
+
+  const floatBeside = (r: DOMRect, vw: number, vh: number) => {
     // Sit beside the gear — the section stays visible while its styles change
     // live. Right of it by preference; on the far side when the right margin
     // cannot hold the whole panel, rather than sliding back OVER the control
@@ -751,7 +807,7 @@ export function SectionGear({
       maxH = Math.min(620, Math.max(minH, anchorBottom - room))
       top = Math.max(room, anchorBottom - maxH)
     }
-    setPos({ top, left, maxH, sheet: false })
+    setPos({ top, left, maxH, sheet: false, dock: false, width: 0 })
     setOpen(true)
   }
 
@@ -875,19 +931,30 @@ export function SectionGear({
       {open &&
         createPortal(
           <>
-            <div className={`fixed inset-0 z-[60] ${pos.sheet ? 'bg-black/35' : ''}`} onClick={() => setOpen(false)} />
+            {/* no backdrop when docked: the page stays live and scrollable */}
+            {!pos.dock && (
+              <div className={`fixed inset-0 z-[60] ${pos.sheet ? 'bg-black/35' : ''}`} onClick={() => setOpen(false)} />
+            )}
             <div
               ref={panelRef}
               role="dialog"
-              aria-modal="true"
+              aria-modal={pos.dock ? undefined : 'true'}
               tabIndex={-1}
               aria-label={`${sectionLabel(sectionKey, doc)} style and settings`}
               className={
                 pos.sheet
                   ? 'fixed inset-x-0 bottom-0 z-[61] flex flex-col rounded-t-2xl border-t border-border bg-surface text-foreground shadow-float'
-                  : 'fixed z-[61] flex w-[308px] flex-col rounded-xl border border-border bg-surface text-foreground shadow-float'
+                  : pos.dock
+                    ? 'fixed z-[61] flex flex-col border-l border-border bg-surface text-foreground shadow-float focus:outline-none'
+                    : 'fixed z-[61] flex w-[308px] flex-col rounded-xl border border-border bg-surface text-foreground shadow-float'
               }
-              style={pos.sheet ? { maxHeight: pos.maxH } : { top: pos.top, left: pos.left, maxHeight: pos.maxH }}
+              style={
+                pos.sheet
+                  ? { maxHeight: pos.maxH }
+                  : pos.dock
+                    ? { top: pos.top, left: pos.left, width: pos.width, height: pos.maxH }
+                    : { top: pos.top, left: pos.left, maxHeight: pos.maxH }
+              }
             >
               {/* Header — stays put while the controls scroll underneath. */}
               <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border px-3 py-2">
@@ -903,6 +970,7 @@ export function SectionGear({
               </div>
 
               {/* Scrollable body — vertical only; sideways clipping can never happen. */}
+              <MoreOpen.Provider value={moreOpen}>
               <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain p-2">
                 {rows.length > 0 && (
                   <Group label="Show">
@@ -928,7 +996,7 @@ export function SectionGear({
                     Gated the way the tag rows below are, on the sections that
                     actually print such a line. */}
                 {HAS_LINK.has(base) && (
-                  <Group label="Link line">
+                  <Group label="Link line" more>
                     <div className="grid grid-cols-4 gap-1">
                       {LINK_STYLES.map((s) => (
                         <StyleChip
@@ -956,7 +1024,7 @@ export function SectionGear({
                     bullet row is. */}
                 {HAS_KEYWORDS.has(base) && opts.showKeywords !== false && (
                   <>
-                    <Group label="Tags as">
+                    <Group label="Tags as" more>
                       <div className="grid grid-cols-3 gap-1">
                         {TAG_STYLES.map((s) => (
                           <StyleChip
@@ -969,7 +1037,7 @@ export function SectionGear({
                         ))}
                       </div>
                     </Group>
-                    <Group label="Tag size">
+                    <Group label="Tag size" more>
                       <div className="grid grid-cols-3 gap-1">
                         {CHIP_SIZES.map((z) => (
                           <ChipBtn
@@ -987,7 +1055,7 @@ export function SectionGear({
                 {/* Page pin — force this section to start a new page (spec 1).
                     With auto-fit on, pagination isn't user-controlled, so the
                     row explains instead of offering a dead toggle. */}
-                <Group label="Page">
+                <Group label="Page" more>
                   {autoFitOn ? (
                     <p className="px-2 py-1 text-[11px] leading-snug text-muted-foreground">
                       Turn off “Magic fit” (Design panel) to pin page breaks.
@@ -1069,7 +1137,7 @@ export function SectionGear({
                     nothing to size, so showing these rows there was confusing */}
                 {!NO_ENTRY_LAYOUT.has(base) && !NO_BADGES.has(base) && (
                   <>
-                    <Group label="Logo & badge size">
+                    <Group label="Logo & badge size" more>
                       <div className="grid grid-cols-4 gap-1">
                         {[
                           { v: '', label: 'Auto' },
@@ -1091,7 +1159,7 @@ export function SectionGear({
                         entry&apos;s form in the Content panel).
                       </p>
                     </Group>
-                    <Group label="Logo & badge shape">
+                    <Group label="Logo & badge shape" more>
                       <div className="grid grid-cols-4 gap-1">
                         {[
                           { v: '', label: 'Auto', title: 'Template default shape' },
@@ -1128,7 +1196,7 @@ export function SectionGear({
                 </Group>
 
                 {/* Heading alignment - where THIS section's heading sits */}
-                <Group label="Heading align">
+                <Group label="Heading align" more>
                   <div className="grid grid-cols-3 gap-1">
                     {HEADING_ALIGNS.map((a) => {
                       // Beside the content the title has a narrow column of
@@ -1162,7 +1230,7 @@ export function SectionGear({
                     they are. The figures come from sectionNumeral.ts, which
                     is what the page actually draws with, so this row and the
                     Design panel's cannot come to offer different ones. */}
-                <Group label="Numbering (all sections)">
+                <Group label="Numbering (all sections)" more>
                   <div className="grid grid-cols-5 gap-1">
                     <ChipBtn
                       label="Off"
@@ -1190,7 +1258,7 @@ export function SectionGear({
                     whole set, then Auto and none. The badge style below
                     decides how the glyph is drawn. */}
                 {iconStyle !== 'none' ? (
-                  <Group label="This section's icon">
+                  <Group label="This section's icon" more>
                     <IconChoice
                       sectionKey={sectionKey}
                       title={sectionLabel(sectionKey, doc)}
@@ -1202,7 +1270,7 @@ export function SectionGear({
 
                 {/* Section badge - style and size are document-wide, unlike
                     every row above, and the labels say so. */}
-                <Group label="Section icons (all sections)">
+                <Group label="Section icons (all sections)" more>
                   <div className="grid grid-cols-4 gap-1">
                     {ICON_STYLES.map((s) => (
                       <StyleChip
@@ -1215,7 +1283,7 @@ export function SectionGear({
                     ))}
                   </div>
                 </Group>
-                <Group label="Icon size (all sections)">
+                <Group label="Icon size (all sections)" more>
                   <div className="grid grid-cols-3 gap-1">
                     {ICON_SIZES.map((z) => (
                       <ChipBtn
@@ -1233,7 +1301,7 @@ export function SectionGear({
                 {!NO_ENTRY_LAYOUT.has(base) && (
                   <Group label="Entries layout">
                     <div className="grid grid-cols-3 gap-1">
-                      {ENTRY_LAYOUTS.map((s) => (
+                      {ENTRY_LAYOUTS.filter((s) => s.value !== 'timeline' || HAS_TIMELINE.has(base)).map((s) => (
                         <StyleChip
                           key={s.value || 'auto'}
                           label={s.label}
@@ -1251,7 +1319,7 @@ export function SectionGear({
                     (title on both) is unset, so a painted Auto lands on it. */}
                 {HAS_ORG.has(base) && (
                   <>
-                    <Group label="Lead with">
+                    <Group label="Lead with" more>
                       <div className="grid grid-cols-2 gap-1">
                         {ENTRY_FIELDS.map((f) => (
                           <ChipBtn
@@ -1264,7 +1332,7 @@ export function SectionGear({
                         ))}
                       </div>
                     </Group>
-                    <Group label="Bold">
+                    <Group label="Bold" more>
                       <div className="grid grid-cols-2 gap-1">
                         {ENTRY_FIELDS.map((f) => (
                           <ChipBtn
@@ -1285,7 +1353,7 @@ export function SectionGear({
                     under the order rows; each is only offered while the
                     section actually shows the field. */}
                 {HAS_LOCATION.has(base) && opts.showLocation !== false && (
-                  <Group label="Location">
+                  <Group label="Location" more>
                     <div className="grid grid-cols-2 gap-1">
                       {LOCATION_PLACEMENTS.map((p) => (
                         <ChipBtn
@@ -1300,7 +1368,7 @@ export function SectionGear({
                   </Group>
                 )}
                 {HAS_DATES.has(base) && opts.showDates !== false && (
-                  <Group label="Date side">
+                  <Group label="Date side" more>
                     <div className="grid grid-cols-2 gap-1">
                       {DATE_ALIGNS.map((d) => (
                         <ChipBtn
@@ -1322,7 +1390,7 @@ export function SectionGear({
 
                 {/* Score placement — education only */}
                 {sectionKey === 'education' && (
-                  <Group label="Score (GPA) placement">
+                  <Group label="Score (GPA) placement" more>
                     <div className="grid grid-cols-3 gap-1">
                       {SCORE_STYLES.map((s) => (
                         <StyleChip
@@ -1396,6 +1464,23 @@ export function SectionGear({
                   </Group>
                 )}
 
+                <button
+                  type="button"
+                  className="mx-1 mt-0.5 flex w-[calc(100%-0.5rem)] items-center justify-center gap-1 rounded-md py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-expanded={moreOpen}
+                  onClick={() => {
+                    setMoreOpen((o) => {
+                      try {
+                        localStorage.setItem('cvaurum:style-more', o ? '0' : '1')
+                      } catch {
+                        /* private mode */
+                      }
+                      return !o
+                    })
+                  }}
+                >
+                  {moreOpen ? 'Fewer options' : 'More options'}
+                </button>
                 <div className="my-1.5 h-px bg-border" />
                 <div className="px-2 pb-1 pt-0.5">
                   <div className="mb-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -1404,7 +1489,7 @@ export function SectionGear({
                   <p className="text-[11px] leading-snug text-muted-foreground">
                     {copiedStyle
                       ? 'Style copied — Paste it here, or paint it onto All sections at once.'
-                      : 'Like Figma’s paint-format: Copy this section’s look (heading, layout, bullets…), then open another section’s Style panel and Paste it there.'}
+                      : 'Copy this section’s look (heading, layout, bullets…), then open another section’s Style panel and Paste it there.'}
                   </p>
                 </div>
                 <div className="flex items-center gap-1 px-1 pb-1">
@@ -1479,6 +1564,7 @@ export function SectionGear({
                   )}
                 </button>
               </div>
+              </MoreOpen.Provider>
             </div>
           </>,
           document.body
@@ -1551,7 +1637,16 @@ function IconChoice({
   )
 }
 
-function Group({ label, children }: { label: string; children: React.ReactNode }) {
+/** Whether the popover's less-used groups are showing (see `more` below). */
+const MoreOpen = createContext(true)
+
+/** One labelled group of the Style popover. A `more` group is a less-used
+ *  setting: it shows once the author asks for More options, so the popover
+ *  opens on the five groups people restyle a section with (Show, heading,
+ *  bullets or meter, skills, layout) instead of 22 in one scroll. */
+function Group({ label, more, children }: { label: string; more?: boolean; children: React.ReactNode }) {
+  const moreOpen = useContext(MoreOpen)
+  if (more && !moreOpen) return null
   return (
     <div className="px-1 pb-2 pt-1">
       <div className="mb-1 px-1 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
@@ -1578,14 +1673,18 @@ function ChipBtn({
   disabled?: boolean
   reason?: string
 }) {
+  // A one-character label is a mark to recognise (•, ○, ▪): drawn at a
+  // size it can be told apart at, and named for a screen reader.
+  const glyph = [...label].length === 1
   return (
     <button
       type="button"
       title={disabled && reason ? reason : title || label}
+      aria-label={glyph ? title || label : undefined}
       aria-pressed={on}
       disabled={disabled}
       onClick={onClick}
-      className={`min-w-0 truncate rounded-md border px-1 py-1.5 text-xs font-medium transition ${
+      className={`min-w-0 truncate rounded-md border px-1 py-1.5 ${glyph ? 'text-base leading-none' : 'text-xs'} font-medium transition ${
         on
           ? 'border-primary bg-primary/10 text-primary'
           : 'border-border text-muted-foreground hover:border-primary/50 hover:text-foreground'

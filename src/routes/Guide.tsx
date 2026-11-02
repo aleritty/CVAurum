@@ -15,6 +15,8 @@ import { useSavedCount } from '@/components/site/HeaderActions'
 import { GUIDES, guideBySlug } from '@/data/guides'
 import { SITE, guidePageMeta } from '@/lib/seoPages'
 import { useSeo } from '@/lib/useSeo'
+import { isExternal, linkParts } from '@/lib/inlineLinks'
+import { guideSections } from '@/data/guideData'
 import { TEMPLATE_COUNT } from '@/templates/registry'
 import { SAMPLE_COUNT } from '@/data/library/count'
 
@@ -61,7 +63,7 @@ export function Guide() {
           </h1>
           {g.intro.map((p, i) => (
             <p key={i} className="mt-3 text-[15px] leading-relaxed text-foreground">
-              {p}
+              <Prose text={p} />
             </p>
           ))}
           {g.tool === 'ats-check' ? (
@@ -73,18 +75,20 @@ export function Guide() {
             </Link>
           )}
 
-          {g.sections.map((sec) => (
+          {guideSections(g).map((sec) => (
             <section key={sec.heading} className="mt-10">
               <h2 className="text-lg font-semibold tracking-tight sm:text-xl">{sec.heading}</h2>
               {sec.paragraphs.map((p, i) => (
                 <p key={i} className="mt-2.5 text-[15px] leading-relaxed text-foreground">
-                  {p}
+                  <Prose text={p} />
                 </p>
               ))}
               {sec.list && (
                 <ul className="mt-3 list-disc space-y-1.5 pl-5 text-[15px] leading-relaxed text-foreground marker:text-muted-foreground">
                   {sec.list.map((li) => (
-                    <li key={li}>{li}</li>
+                    <li key={li}>
+                      <Prose text={li} />
+                    </li>
                   ))}
                 </ul>
               )}
@@ -97,7 +101,9 @@ export function Guide() {
               {g.faq.map((f) => (
                 <div key={f.q} className="p-4">
                   <dt className="text-[15px] font-medium">{f.q}</dt>
-                  <dd className="mt-1.5 text-sm leading-relaxed text-muted-foreground">{f.a}</dd>
+                  <dd className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                    <Prose text={f.a} />
+                  </dd>
                 </div>
               ))}
             </dl>
@@ -105,10 +111,10 @@ export function Guide() {
 
           <p className="mt-10 flex flex-wrap gap-x-4 gap-y-2 text-sm">
             <Link className="text-primary hover:underline" to="/templates">
-              Browse the {TEMPLATE_COUNT} résumé templates
+              Browse the {TEMPLATE_COUNT} resume templates
             </Link>
             <Link className="text-primary hover:underline" to="/examples">
-              Read {SAMPLE_COUNT} complete résumé examples
+              Read {SAMPLE_COUNT} complete resume examples
             </Link>
             {others.map((x) => (
               <Link key={x.slug} className="text-primary hover:underline" to={`/${x.slug}`}>
@@ -121,5 +127,27 @@ export function Guide() {
 
       <SiteFooter />
     </div>
+  )
+}
+
+/** A guide's sentence with its `[label](/path)` links (lib/inlineLinks). */
+function Prose({ text }: { text: string }) {
+  return (
+    <>
+      {linkParts(text).map((p, i) => {
+        if (typeof p === 'string') return p
+        const cls = 'text-primary underline decoration-primary/40 underline-offset-2 hover:decoration-primary'
+        // the project's own repository leaves the app; every other link is a route
+        return isExternal(p.href) ? (
+          <a key={i} className={cls} href={p.href} target="_blank" rel="noopener noreferrer">
+            {p.label}
+          </a>
+        ) : (
+          <Link key={i} className={cls} to={p.href}>
+            {p.label}
+          </Link>
+        )
+      })}
+    </>
   )
 }

@@ -8,12 +8,25 @@
 # 57 URLs sat in the index as "alternative page with proper canonical tag",
 # which is crawl budget spent on duplicates. A 301 says the slashed form is
 # not coming back, which is the truth: it has never been a page of this site.
+# Renamed designs keep their id (stored in every résumé that uses it) but
+# take a public slug of their own; the old address follows them. Listed
+# before the rules with placeholders, which the host would read first.
+/templates/deedy     /templates/duet     301
 /templates/          /templates          301
 /examples/           /examples           301
 /prompts/            /prompts            301
 /free-resume-builder/          /free-resume-builder          301
 /ats-resume-checker/           /ats-resume-checker           301
 /resume-builder-no-sign-up/    /resume-builder-no-sign-up    301
+/resume-format/                /resume-format                301
+/how-to-write-a-resume/        /how-to-write-a-resume        301
+/resume-for-freshers/          /resume-for-freshers          301
+/cv-template/                  /cv-template                  301
+/resume-template-word/         /resume-template-word         301
+/resume-summary-examples/      /resume-summary-examples      301
+/resume-skills/                /resume-skills                301
+/resume-action-verbs/          /resume-action-verbs          301
+/about/                        /about                        301
 /templates/:id/      /templates/:id      301
 /examples/:slug/     /examples/:slug     301
 

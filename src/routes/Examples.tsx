@@ -212,7 +212,7 @@ export function Examples() {
 
       <main className="mx-auto max-w-6xl px-4 py-9 sm:px-6 sm:py-10">
         <h1 className="max-w-3xl text-3xl font-semibold tracking-tight sm:text-[2.4rem] sm:leading-[1.12]">
-          {LIBRARY.length} résumé examples, written out in full
+          {LIBRARY.length} resume examples, written out in full
         </h1>
         <p className="mt-3.5 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           Complete résumés for real jobs — every bullet naming something that happened and what it changed. Open any one
@@ -302,7 +302,7 @@ export function Examples() {
               <label className="inline-flex h-10 items-center gap-2 rounded-md border border-input bg-surface px-3 text-sm shadow-soft">
                 <span className="text-muted-foreground">Sort</span>
                 <select
-                  className="bg-transparent font-medium text-foreground focus-visible:outline-none"
+                  className="h-full cursor-pointer bg-transparent font-medium text-foreground focus-visible:outline-none"
                   value={sort}
                   onChange={(e) => setSort(e.target.value as SortKey)}
                   aria-label="Sort the examples"

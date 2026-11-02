@@ -342,8 +342,21 @@
    punctuation it is. Stacked rows never take one. */
 .rm-contacts.rm-contacts-sep:not(.rm-contacts-stacked) .rm-contact:not(:last-child)::after {
   content: var(--rm-contact-sep, '·');
-  margin-left: 0.5em;
+  /* The same air on both sides of the mark. It used to take 0.5em on its
+     left and the row's whole column gap (1.1em, or a template's own) on its
+     right, so it sat glued to the contact before it and far from the one
+     after - in every design that separates its contacts (2026-10-24). The
+     row's column gap is zeroed below and the mark carries both sides; the
+     left loses the contact's own 5px icon gap, which already stands there. */
+  margin-left: calc(var(--rm-sep-space, 0.6em) - 5px);
+  margin-right: var(--rm-sep-space, 0.6em);
   opacity: 0.5;
+}
+/* Stronger than any template's own gap on the row (those are three classes
+   deep), so no design can put its spacing back on one side only. Only the
+   COLUMN gap: a wrapped second line keeps its row gap. */
+.rm-root .rm-contacts.rm-contacts-sep.rm-contacts-sep:not(.rm-contacts-stacked) {
+  column-gap: 0;
 }
 
 /* ---- the contact line's other arrangements (layout.contactStyle) --------
@@ -436,6 +449,18 @@
 .rm-contacts-strip.rm-strip-2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+/* A last row that is not full closes like the rest: a detail left alone on
+   it spans the remaining cells, so the rule above it runs the whole width.
+   It stopped under the lone cell, and the grid read as broken off - five
+   details in two columns left LinkedIn alone under a half-length rule
+   (2026-10-24). */
+.rm-contacts-strip.rm-strip-2 .rm-contact:last-child:nth-child(2n + 1),
+.rm-contacts-strip.rm-strip-3 .rm-contact:last-child:nth-child(3n + 1) {
+  grid-column: 1 / -1;
+}
+.rm-contacts-strip.rm-strip-3 .rm-contact:last-child:nth-child(3n + 2) {
+  grid-column: span 2;
+}
 /* Wrap: three columns kept, and a long address breaks only between its own
    segments (Artboard.tsx AddressText boxes each one), never inside a word. */
 .rm-contacts-strip.rm-links-wrap .rm-contact-seg {
@@ -470,7 +495,9 @@
 .rm-contacts.rm-contacts-node .rm-contact:not(:last-child)::after {
   opacity: 1;
   font-size: 0.8em;
-  margin-left: 0.7em;
+  /* In the node's own (smaller) em, so 0.75em here is the 0.6em of a plain
+     mark: the same air either side. */
+  --rm-sep-space: 0.75em;
 }
 .rm-root :is(.rm-header-standard, .rm-header-centered, .rm-header-compact, .rm-header-display, .rm-header-split, .rm-header-kicker):not(.rm-header-art)
   .rm-contacts-node .rm-contact:not(:last-child)::after {
@@ -651,7 +678,11 @@
    shows where each page really ends and starts. Edit canvas only — print never carries .mode-preview, so
    export geometry is untouched. */
 .mode-preview [data-page-start] {
-  margin-top: calc(var(--rm-gap-paper-above, 0px) + var(--rm-page-gap, 28px) + var(--rm-gap-paper-below, 0px));
+  /* --rm-gap-slack: the paper the printed page leaves blank under its last
+     line, so the canvas page is as tall as the PDF's (ResumePreview). */
+  margin-top: calc(
+    var(--rm-gap-slack, 0px) + var(--rm-gap-paper-above, 0px) + var(--rm-page-gap, 28px) + var(--rm-gap-paper-below, 0px)
+  );
 }
 .rm-section:last-child {
   margin-bottom: 0;
@@ -858,6 +889,12 @@
 .mode-print .rm-visual-hide,
 .mode-thumbnail .rm-visual-hide {
   display: none;
+}
+/* A thumbnail is a whole page: a short résumé on a dark design left the
+   white of the thumbnail's frame showing under its last line, a strip of
+   blank paper on a black sheet (Folio Noir in the homepage reel). */
+.rm-root.mode-thumbnail {
+  min-height: var(--rm-page-h, 1122.52px);
 }
 
 .rm-section-gear svg {
@@ -1702,6 +1739,16 @@
   text-align: var(--rm-align, left);
   text-wrap: var(--rm-wrap, wrap);
 }
+/* A justified paragraph whose lines would open gaps past the limit is set
+   flush-left instead, by measurement (lib/pdf/looseLines.ts). Same breaks,
+   same height - only the spaces stop stretching. */
+/* Spelled out as the rule above plus the mark, so it outranks it whatever
+   the selector: a bare [data-ragged] lost to `.rm-bullets li` and every
+   marked bullet stayed justified. */
+.rm-col-main :is(.rm-item-summary, .rm-bullets li, .rm-rich, .rm-rich p)[data-ragged],
+.rm-col-main [data-ragged] p {
+  text-align: left;
+}
 
 /* skills */
 .rm-skill-group {
@@ -1967,6 +2014,18 @@
 }
 .rm-mini:last-child {
   margin-bottom: 0;
+}
+/* In a section body - a flex column whose gap already separates its rows -
+   the row's own margin would come on top, since a flex item's margin never
+   collapses into the gap: two one-line languages on Keystone stood 20px
+   apart, a blank line, and more again at a larger size. The gap alone
+   separates them; the margin above stays for rows outside a body. */
+.rm-section-body > .rm-mini {
+  margin-bottom: 0;
+}
+/* A language is one line: it takes the mini rhythm, not a job block's. */
+[data-section='languages'] > .rm-section-body {
+  gap: var(--rm-item-gap-mini, var(--rm-item-gap));
 }
 .rm-mini-title {
   font-weight: 600;
@@ -3340,44 +3399,109 @@
   cursor: pointer;
 }
 
-/* Inline bullet add/remove (editable preview only) */
+/* Editor ink (editable preview only). The canvas's own marks - hover
+   outlines, the caret's field, the bullet tools - are the editor talking, not
+   the résumé, so they never borrow the design's accent: on a red design an
+   accent ring and tint made every edit look like an error and washed the line
+   being edited (2026-10-24). Graphite for "you can edit this", the app's own
+   gold for "you are editing this", red only under the pointer on a remove. */
+.mode-preview {
+  --rm-edit-hint: rgb(51 65 85 / 0.26);
+  --rm-edit-hint-soft: rgb(51 65 85 / 0.12);
+  --rm-edit-focus: hsl(36 68% 42%);
+  --rm-edit-focus-wash: hsl(36 68% 42% / 0.06);
+  --rm-edit-tool-ink: #475569;
+  --rm-edit-tool-ink-strong: #0f172a;
+  --rm-edit-danger: #dc2626;
+}
+
+/* Bullet tools: move up, move down, remove - one cluster past the end of
+   the line (editable preview only). */
 .mode-preview .rm-bullet-row {
   position: relative;
 }
-.mode-preview .rm-bullet-del {
+.mode-preview .rm-bullet-tools {
   position: absolute;
-  right: -1.35em;
-  top: 0.1em;
-  width: 1.1em;
-  height: 1.1em;
-  line-height: 1;
-  border-radius: 9999px;
+  left: 100%;
+  top: 0;
+  margin-left: 0.45em;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  color: #fff;
-  background: #ef4444;
-  font-size: 0.95em;
-  cursor: pointer;
+  gap: 1px;
+  padding: 1px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 1px solid rgb(15 23 42 / 0.12);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
+  /* A steady size on screen whatever the canvas zoom: the sheet is scaled,
+     and at a fitted 0.65 the tools shrank to a 10px smudge. */
+  font-size: max(0.82em, calc(11px / var(--rm-zoom, 1)));
+  line-height: 1;
+  white-space: nowrap;
+  z-index: 5;
+  /* Inert while hidden (hover-reveal trap 3), revealed by the row (trap 4). */
   opacity: 0;
-  /* Hidden means untouchable. Opacity alone leaves a control fully
-     hit-testable, so this invisible pill lay over a skill chip's remove cross
-     and stole its hover - the two traded hover back and forth and the UI
-     shook under the cursor. Safe here because a PARENT hover reveals it: a
-     control whose own :hover is what reveals it must never do this, or it can
-     never be hovered at all (that is what made the Style pill unclickable). */
   pointer-events: none;
   transition: opacity 0.12s ease;
 }
-/* Focus reveals it too. Tabbing used to land on a control at opacity 0: the
-   focus ring was drawn on something invisible, so focus appeared to leave the
-   page, and Enter there deleted a bullet with nothing on screen to warn of it.
-   :focus-within covers arriving by keyboard, :focus-visible the button itself. */
-.mode-preview .rm-bullet-row:hover .rm-bullet-del,
-.mode-preview .rm-bullet-row:focus-within .rm-bullet-del,
-.mode-preview .rm-bullet-del:focus-visible {
+/* The cluster stands just past the row's edge; this bridge spans the strip
+   between, so the pointer can travel to it without the row losing :hover
+   and the cluster hiding under it (trap 1, which first hid the remove
+   button "like magic"). Inert exactly when the cluster is. */
+.mode-preview .rm-bullet-tools::before {
+  content: '';
+  position: absolute;
+  top: -0.2em;
+  bottom: -0.2em;
+  right: 100%;
+  width: 0.6em;
+}
+.mode-preview .rm-bullet-row:hover > .rm-bullet-tools,
+.mode-preview .rm-bullet-row:focus-within > .rm-bullet-tools {
   opacity: 1;
   pointer-events: auto;
+}
+.mode-preview .rm-bullet-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55em;
+  height: 1.55em;
+  border-radius: 9999px;
+  color: var(--rm-edit-tool-ink);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+.mode-preview .rm-bullet-tool svg {
+  width: 1.05em;
+  height: 1.05em;
+  stroke-width: 2.25;
+}
+.mode-preview .rm-bullet-tool:hover {
+  background: rgb(15 23 42 / 0.07);
+  color: var(--rm-edit-tool-ink-strong);
+}
+.mode-preview .rm-bullet-tool:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+.mode-preview .rm-bullet-tool:focus-visible {
+  outline: 2px solid var(--rm-edit-focus);
+  outline-offset: 1px;
+}
+.mode-preview .rm-bullet-tool.rm-bullet-del:hover {
+  background: rgb(220 38 38 / 0.1);
+  color: var(--rm-edit-danger);
+}
+/* Which line the tools act on: a neutral wash while the pointer is on them,
+   a faint red one while it is on remove - the line, not the whole entry. */
+.mode-preview .rm-bullet-row:has(> .rm-bullet-tools:hover) > .rm-editable {
+  background: rgb(15 23 42 / 0.04);
+}
+.mode-preview .rm-bullet-row:has(> .rm-bullet-tools .rm-bullet-del:hover) > .rm-editable {
+  background: rgb(220 38 38 / 0.06);
 }
 .mode-preview .rm-bullet-addrow {
   list-style: none;
@@ -3388,8 +3512,8 @@
 .mode-preview .rm-add-btn {
   font-size: 0.82em;
   font-weight: 600;
-  color: var(--rm-primary);
-  background: color-mix(in srgb, var(--rm-primary) 10%, transparent);
+  color: var(--rm-edit-tool-ink);
+  background: rgb(15 23 42 / 0.05);
   border-radius: 0.3em;
   padding: 0.1em 0.55em;
   cursor: pointer;
@@ -3495,6 +3619,68 @@
 .mode-preview .rm-add-entry-row {
   margin-top: 0.4em;
 }
+/* With a mouse the add rows take NO room on the page. In the flow, hidden
+   until hover, they still held their height: measured on a real three-page
+   résumé, 215px of "+ Add …" rows and 150px of "+ bullet" rows - nearly half
+   a page of air between sections that the PDF does not have (2026-10-24).
+   They hang below their section or entry instead, over the gap, inert until
+   that section or entry is under the pointer (a hanging control that took
+   the pointer at rest would steal the next heading's hover - see the reveal
+   traps). An empty section's own Add stays in the flow: it is that
+   section's only line. A touch screen keeps them all in the flow. */
+@media (hover: hover) and (pointer: fine) {
+  /* the section's Add at the right edge, an entry's "+ bullet" at the
+     left: on a section's last entry both are up at once, and in one place
+     they printed over each other ("+ Aullet experience") */
+  .mode-preview .rm-add-entry-row:not(.is-first) {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    margin: 0;
+    z-index: 6;
+    pointer-events: none;
+  }
+  .mode-preview .rm-bullets-edit {
+    position: relative;
+  }
+  /* "+ bullet" sits in the left gutter beside the last bullet, as a round
+     "+": hung below the list it lay over the next entry's title, because the
+     space between two entries is a few pixels (critique round 3). The gutter
+     beside a list measured 20px at its narrowest across all 75 designs
+     (Duet), 39px or more on every other; the mark is 16px and touches the
+     list's edge, so the pointer crosses no dead strip on its way there. Its
+     words stay in the button for a screen reader; only the eye sees "+". */
+  .mode-preview .rm-bullets-edit > .rm-bullet-addrow {
+    position: absolute;
+    right: 100%;
+    bottom: 0;
+    margin: 0;
+    z-index: 6;
+    pointer-events: none;
+  }
+  .mode-preview .rm-bullets-edit > .rm-bullet-addrow .rm-add-btn {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border-radius: 999px;
+    font-size: 0;
+    line-height: 0;
+  }
+  .mode-preview .rm-bullets-edit > .rm-bullet-addrow .rm-add-btn::before {
+    content: '+';
+    font-size: 13px;
+    line-height: 1;
+    font-weight: 600;
+  }
+  .mode-preview .rm-section:is(:hover, :focus-within) .rm-add-entry-row,
+  .mode-preview :is(.rm-item, .rm-mini):is(:hover, :focus-within) .rm-bullet-addrow,
+  .mode-preview .rm-add-entry-row:focus-within,
+  .mode-preview .rm-bullet-addrow:focus-within {
+    pointer-events: auto;
+  }
+}
 /* Inline "Add section" at the foot of the canvas (editable preview only). */
 .mode-preview .rm-add-section {
   display: block;
@@ -3503,10 +3689,10 @@
   padding: 0.55em;
   font-size: 0.82em;
   font-weight: 600;
-  color: var(--rm-primary);
-  border: 1px dashed color-mix(in srgb, var(--rm-primary) 45%, transparent);
+  color: var(--rm-edit-tool-ink);
+  border: 1px dashed rgb(51 65 85 / 0.3);
   border-radius: 0.4em;
-  background: color-mix(in srgb, var(--rm-primary) 6%, transparent);
+  background: rgb(15 23 42 / 0.03);
   cursor: pointer;
   opacity: 0.75;
   transition:
@@ -3515,7 +3701,115 @@
 }
 .mode-preview .rm-add-section:hover {
   opacity: 1;
-  background: color-mix(in srgb, var(--rm-primary) 12%, transparent);
+  background: rgb(15 23 42 / 0.06);
+}
+
+/* ---- the page at rest: tools where you work, the résumé everywhere else ----
+   Critique, 2026-10-23: in edit mode every section carried a Style pill, a
+   hide eye and a link glyph, every entry a grey "Brief role overview" line
+   and a "+ bullet" chip - the sample résumé alone held 43 remove buttons -
+   so the page read as a control panel rather than the document it prints.
+
+   1. Tool ink. The add controls drew in the document's own accent at 70%
+      (measured 2.7:1 for "+ bullet", 3.1:1 for "+ Add section"), which made
+      them read as part of the résumé and failed AA. They take the neutral
+      ink the Style pill already uses, at full strength, and turn to the
+      accent only under the pointer. */
+.mode-preview .rm-add-btn,
+.mode-preview .rm-add-section {
+  color: color-mix(in srgb, var(--rm-text) 72%, var(--rm-muted));
+  opacity: 1;
+}
+.mode-preview .rm-add-btn {
+  background: color-mix(in srgb, var(--rm-text) 6%, transparent);
+}
+.mode-preview .rm-add-section {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--rm-text) 28%, transparent);
+}
+.mode-preview .rm-add-btn:hover,
+.mode-preview .rm-add-btn:focus-visible,
+.mode-preview .rm-add-section:hover,
+.mode-preview .rm-add-section:focus-visible {
+  color: var(--rm-edit-tool-ink-strong);
+  background: rgb(15 23 42 / 0.07);
+}
+
+/* 2. Optional fields left empty show only inside the entry being worked on:
+      at rest the page holds exactly what it prints, and a click into the
+      entry brings the line up to type in. Focus, not hover - an empty line
+      appearing under a passing pointer would move everything below it - and
+      only focus that moves nothing above the caret: [data-engaged] is set by
+      optionalReveal.ts, so a first click on a bullet no longer opens the
+      overview line above it and slides the bullet out from under the click. */
+.mode-preview :is(.rm-item, .rm-mini):not([data-engaged]) .rm-editable[data-optional]:empty,
+.mode-preview :is(.rm-item, .rm-mini):not([data-engaged]) .rm-sep:has(+ .rm-editable[data-optional]:empty),
+.mode-preview :is(.rm-item, .rm-mini):not([data-engaged]) .rm-item-summary:has(> .rm-editable[data-optional]:empty) {
+  display: none;
+}
+
+/* 3. With a mouse, a section's own tools come up with the section: the Style
+      pill, the hide eye, the link glyph after a title, and the add chips.
+      Each sits inside the box whose hover reveals it, so the pointer that
+      reaches it is already revealing it, and keyboard focus reveals the
+      same set. A touch screen has no hover: there they stay as they were. */
+@media (hover: hover) and (pointer: fine) {
+  .mode-preview .rm-section .rm-section-gear,
+  .mode-preview .rm-section .rm-section-hide:not(:disabled),
+  .mode-preview .rm-header > .rm-section-gear,
+  .mode-preview .rm-title-link-btn:not(.is-linked),
+  .mode-preview .rm-section .rm-add-btn {
+    opacity: 0;
+  }
+  /* A section's tools belong to its heading row: Style, hide and move come
+     up when the pointer is on the heading (or on the tools themselves), and
+     an entry's tools when it is on that entry. Revealed by any hover in the
+     section, the section's row and the first entry's lifted cluster shared
+     one line and collided. */
+  .mode-preview .rm-section:has(> :is(.rm-section-title, .rm-section-controls, .rm-section-gear):hover) .rm-section-gear,
+  .mode-preview .rm-section:has(> :is(.rm-section-title, .rm-section-controls, .rm-section-gear):hover) .rm-section-hide:not(:disabled),
+  .mode-preview .rm-section:has(> :is(.rm-section-controls, .rm-section-gear):focus-within) .rm-section-gear,
+  .mode-preview .rm-section:has(> .rm-section-controls:focus-within) .rm-section-hide:not(:disabled),
+  .mode-preview .rm-header:is(:hover, :focus-within) > .rm-section-gear,
+  .mode-preview .rm-section-gear:focus-visible,
+  .mode-preview .rm-section-hide:focus-visible {
+    opacity: 1;
+  }
+  .mode-preview :is(.rm-item-head, .rm-section-title, .rm-contact):is(:hover, :focus-within) .rm-title-link-btn,
+  .mode-preview .rm-title-link-btn:focus-visible {
+    opacity: 1;
+  }
+  /* an entry's own "+ bullet" with its entry; a section's "+ Add …" with
+     the section */
+  .mode-preview :is(.rm-item, .rm-mini):is(:hover, :focus-within) .rm-add-btn,
+  .mode-preview .rm-section:is(:hover, :focus-within) .rm-add-btn:not(:is(.rm-item, .rm-mini) .rm-add-btn),
+  .mode-preview .rm-add-entry-row.is-first .rm-add-btn,
+  .mode-preview .rm-add-btn:focus-visible {
+    opacity: 1;
+  }
+  /* a linked title keeps a quiet mark that its link exists; a contact says
+     so with its own underline, so its glyph waits for the pointer */
+  .mode-preview :is(.rm-item-head, .rm-section-title) .rm-title-link-btn.is-linked {
+    opacity: 0.55;
+  }
+  .mode-preview .rm-contact > .rm-title-link-btn.is-linked {
+    opacity: 0;
+  }
+  .mode-preview .rm-contact:is(:hover, :focus-within) > .rm-title-link-btn.is-linked {
+    opacity: 1;
+  }
+  /* Moving a section is a heading-row act too (see above). */
+  /* An entry's in-flow arrows are the KEYBOARD route; with a mouse the
+     hover cluster (CanvasReorder: grip, up, down, page pin) moves the entry,
+     and the two together drew two sets of arrows for one entry. Here the
+     in-flow pair appears only when Tab reaches it. */
+  .mode-preview :is(.rm-item, .rm-skill-group, .rm-ring, .rm-mini):is(:hover, :focus-within) > .rm-item-move:not(:focus-within) {
+    display: none;
+  }
+  .mode-preview .rm-section:not(:has(> :is(.rm-section-title, .rm-section-controls):hover)):not(:has(> .rm-section-controls:focus-within)) .rm-section-move:not(:focus-visible),
+  .mode-preview .rm-section:not(:has(> :is(.rm-section-title, .rm-section-controls, .rm-section-gear):hover)):not(:has(> :is(.rm-section-controls, .rm-section-gear):focus-within)) :is(.rm-section-gear, .rm-section-hide):not(:focus-visible) {
+    opacity: 0;
+  }
 }
 
 /* On-canvas item delete (editable preview only): a small ghost trash button
@@ -3602,16 +3896,6 @@
   background: color-mix(in srgb, #ef4444 12%, var(--rm-bg));
 }
 
-/* Discoverability hint under an empty section (editable preview only): the
-   ghost placeholder fields look like a real entry, so spell out that nothing
-   here reaches the export until it's filled in. One quiet line, no icon. */
-.mode-preview .rm-empty-hint {
-  margin: 0.15em 0 0;
-  font-size: 0.78em;
-  font-style: italic;
-  color: var(--rm-muted);
-  opacity: 0.8;
-}
 
 /* Inline date picker trigger (editable canvas) */
 .rm-date-edit {
@@ -3637,8 +3921,7 @@
   white-space: nowrap;
 }
 .mode-preview .rm-date-edit:hover {
-  background: color-mix(in srgb, var(--rm-primary) 8%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rm-primary) 36%, transparent);
+  box-shadow: 0 0 0 1px var(--rm-edit-hint);
 }
 
 /* ATS keyword highlight (preview only) */
@@ -3657,13 +3940,18 @@
     box-shadow 0.12s ease,
     background 0.12s ease;
 }
+/* Outlines, not box-shadows: a wrapped field is one inline element in
+   several line boxes, and a shadow ringed each line on its own - at a tight
+   line height the rings crossed the lines above and below (2026-10-26). An
+   outline is drawn as one contour around all of them. */
 .mode-preview .rm-editable:hover {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--rm-primary) 38%, transparent);
+  outline: 1px solid var(--rm-edit-hint);
+  outline-offset: 1px;
 }
 .mode-preview .rm-editable:focus {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--rm-primary);
-  background: color-mix(in srgb, var(--rm-primary) 7%, transparent);
+  outline: 1.5px solid var(--rm-edit-focus);
+  outline-offset: 1px;
+  background: var(--rm-edit-focus-wash);
 }
 .mode-preview .rm-editable:empty::before {
   content: attr(data-placeholder);
@@ -3683,9 +3971,9 @@
     box-shadow 0.12s ease,
     background 0.12s ease;
 }
+/* An outline only: a fill under the entry dimmed the very words being read. */
 .mode-preview .rm-item:hover {
-  background: color-mix(in srgb, var(--rm-primary) 7%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rm-primary) 55%, transparent);
+  box-shadow: 0 0 0 1px var(--rm-edit-hint);
 }
 /* A lighter ring for the whole section, shown until you hover a specific entry
  * inside it (then the entry ring above takes over). */
@@ -3696,7 +3984,7 @@
     background 0.12s ease;
 }
 .mode-preview .rm-section:hover {
-  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--rm-primary) 22%, transparent);
+  box-shadow: 0 0 0 1px var(--rm-edit-hint-soft);
 }
 .mode-preview .rm-section:hover:has(.rm-item:hover) {
   box-shadow: none;
@@ -3749,7 +4037,7 @@
 .rm-logo-btn:hover .rm-item-badge,
 .rm-logo-btn:focus-visible .rm-item-logo,
 .rm-logo-btn:focus-visible .rm-item-badge {
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--rm-primary) 55%, transparent);
+  box-shadow: 0 0 0 1.5px var(--rm-edit-focus);
 }
 /* No logo & no badge yet: a quiet "+" chip that only shows while the entry is
    hovered (or the chip is focused) — discoverable without cluttering the page.
@@ -3784,10 +4072,11 @@
   line-height: 1;
   padding: 0.35em 0.6em;
   border-radius: 9999px;
-  color: var(--rm-primary);
-  border: 1px dashed color-mix(in srgb, var(--rm-primary) 60%, transparent);
-  /* solid-ish backing so the label reads over sidebars and the gray canvas */
-  background: color-mix(in srgb, var(--rm-primary) 8%, #fff);
+  /* Editor ink, not the design's accent (see .mode-preview tokens). */
+  color: var(--rm-edit-tool-ink, #475569);
+  border: 1px dashed rgb(51 65 85 / 0.4);
+  /* solid backing so the label reads over sidebars and the gray canvas */
+  background: #fff;
   transition: opacity 0.15s ease;
 }
 .rm-item:hover .rm-logo-add,
@@ -5316,4 +5605,12 @@
   .rm-visual-swap::after {
     content: none;
   }
+}
+
+/* The section a docked Style inspector is editing (SectionGear), outlined
+   on the page so a change and the section it lands on are seen together. */
+.mode-preview .rm-section[data-styling] {
+  outline: 2px solid color-mix(in srgb, var(--rm-primary) 40%, transparent);
+  outline-offset: 5px;
+  border-radius: 3px;
 }

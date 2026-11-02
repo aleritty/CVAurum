@@ -446,7 +446,7 @@ export const TEMPLATES: TemplateConfig[] = [
   {
     id: 'cambridge',
     name: 'Cambridge',
-    description: 'RenderCV-grade clean layout: Source Sans, navy accent, ruled headings, right-aligned dates. The academic/engineer favorite.',
+    description: 'A clean academic layout: Source Sans, a navy accent, ruled headings and right-aligned dates. A favourite for research and engineering CVs.',
     tags: ['ats-safe', 'single-column', 'classic'],
     atsSafe: true,
     class: 'tpl-cambridge',
@@ -463,7 +463,7 @@ export const TEMPLATES: TemplateConfig[] = [
   {
     id: 'vector',
     name: 'Vector',
-    description: "The beloved single-column tech format (Jake's Resume lineage): small-caps ruled headings, italic roles, ruthless ATS clarity. A favorite for software roles.",
+    description: 'A single-column technical format: small-caps ruled headings, italic roles and nothing an ATS could misread. A favourite for software roles.',
     tags: ['ats-safe', 'single-column', 'technical', 'classic'],
     atsSafe: true,
     class: 'tpl-vector',
@@ -808,8 +808,9 @@ export const TEMPLATES: TemplateConfig[] = [
   },
   {
     id: 'deedy',
-    name: 'Deedy',
-    description: 'The iconic two-column résumé — tight, bold, and recruiter-loved.',
+    slug: 'duet',
+    name: 'Duet',
+    description: 'A tight, bold two-column résumé: a narrow sidebar of skills and links beside a dense main column, red rules and capitalised headings.',
     tags: ['two-column', 'modern', 'technical'],
     atsSafe: true,
     class: 'tpl-deedy',
@@ -1768,9 +1769,10 @@ export const TEMPLATES: TemplateConfig[] = [
      *
      * JUSTIFIED, because the even grey of a justified measure is the whole
      * effect. This paragraph was written when nothing in this renderer
-     * hyphenated, which is what usually makes that a bad trade; the renderer
-     * hyphenates for itself now, and a page exported today breaks words at
-     * the measure. (The reason it had to be our own: a browser's soft hyphen
+     * hyphenated, which is what usually makes that a bad trade. The renderer
+     * hyphenated for a while and no longer does (2026-10-24): the page being
+     * edited cannot show those breaks, so the file set lines the canvas never
+     * did. (The reason it had to be our own: a browser's soft hyphen
      * is not a character of the text node, and the painter draws each run
      * from that node's own range, so the canvas would show a hyphen the file
      * does not - artboard.css says so where the alignment is read.) So it was
@@ -1795,8 +1797,9 @@ export const TEMPLATES: TemplateConfig[] = [
      * 2.6x the natural one, and it lands within 0.07pt of the single 8.43pt
      * space the source's own page carries. The page is looser than it was
      * and it is loose in the same way, and to the same degree, as the page
-     * it is modelled on - which is the point. It is also why the hyphenation
-     * this renderer now does is load-bearing here rather than a nicety.
+     * it is modelled on - which is the point. Without hyphenation the loosest
+     * lines may open a little wider than these figures; the 0.6in measure is
+     * what keeps that within reason.
      */
     description:
       'A page set the way a typesetting engine sets one: a 0.6in measure of justified text on a tight 12pt baseline, a centred name in capitals, and section titles at the size of the body with a hairline rule beneath.',
@@ -1894,7 +1897,15 @@ export function galleryOrder(list: readonly TemplateConfig[]): TemplateConfig[] 
  *  have; the static tags in index.html cannot import it and are guarded by a
  *  test instead. */
 export const TEMPLATE_COUNT = TEMPLATES.length
+/** The Signature designs: each a different page structure, not a recolour. */
+export const SIGNATURE_COUNT = TEMPLATES.filter((t) => t.tags.includes('signature')).length
 
 export function getTemplate(id?: string): TemplateConfig {
   return (id && TEMPLATE_MAP[id]) || TEMPLATE_MAP.modern
+}
+
+/** A design's page address: its public slug, else its id. Every link,
+ *  sitemap entry and pre-rendered page goes through this. */
+export function templatePath(t: TemplateConfig): string {
+  return `/templates/${t.slug ?? t.id}`
 }

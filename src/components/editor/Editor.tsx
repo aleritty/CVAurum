@@ -1,3 +1,4 @@
+import { SkipLink } from '@/components/ui/SkipLink'
 import { useEffect } from 'react'
 import { scheduleWarmPdfFonts } from '@/lib/pdf/fontWarm'
 import { documentFaces } from '@/lib/documentFaces'
@@ -28,7 +29,7 @@ const PANEL_TITLES: Record<string, string> = {
   content: 'Content',
   design: 'Design',
   templates: 'Templates',
-  ats: 'ATS & Tailoring',
+  ats: 'Score & job match',
 }
 
 export function Editor({ doc }: { doc: ResumeDocument }) {
@@ -91,12 +92,8 @@ export function Editor({ doc }: { doc: ResumeDocument }) {
         sessionStorage.removeItem('cvaurum:pick-design')
         useEditorStore.getState().setLeftTab('templates')
         useEditorStore.getState().setLeftOpen(true)
-        useAppStore.getState().toast(
-          isPhoneLayout()
-            ? 'Start by picking a design — tap Preview on a card for a full-size look. Your content will flow into whichever you choose.'
-            : 'Start by picking a design — hover any card for a full-size preview. Your content will flow into whichever you choose.',
-          'info'
-        )
+        // No toast here: the gallery's own first line says the same, and on a
+        // phone the toast sat on top of the tour's invite card (2026-10-24).
       }
     } catch {
       /* private mode */
@@ -104,8 +101,18 @@ export function Editor({ doc }: { doc: ResumeDocument }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id])
 
+  // The skip link lands in the résumé's first field, putting the page on
+  // screen first where the panel covers it (a phone, or a narrow window).
+  const skipToPage = () => {
+    if (leftOpen && !split) setLeftOpen(false)
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-tour="canvas"] [role="textbox"]')?.focus())
+    )
+  }
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <SkipLink label="Skip to your résumé" onSkip={skipToPage} />
       <EditorTopBar doc={doc} />
       <PdfExportStatus />
       <div className="flex min-h-0 flex-1 flex-col desk:flex-row">
@@ -150,15 +157,19 @@ export function Editor({ doc }: { doc: ResumeDocument }) {
             </motion.aside>
           )}
         </AnimatePresence>
-        <div
+        <main
           data-tour="canvas"
+          aria-label="Your résumé"
           className={cn(
-            'order-2 min-h-0 min-w-0 flex-1 desk:order-none',
+            // While a section's Style inspector is docked at the right edge
+            // (SectionGear), the canvas gives up its width, so the page
+            // re-fits beside it instead of sliding under it.
+            'order-2 min-h-0 min-w-0 flex-1 desk:order-none desk:mr-[var(--style-dock-w,0px)] desk:transition-[margin] desk:duration-200',
             leftOpen && (split ? 'phone:hidden' : 'hidden'),
           )}
         >
           <ResumePreview doc={doc} />
-        </div>
+        </main>
       </div>
       <EditorTour />
       <CommandPalette doc={doc} />

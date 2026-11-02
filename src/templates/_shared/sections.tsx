@@ -8,7 +8,7 @@
 import { runItemDelete } from './itemActions'
 import { Fragment, lazy, Suspense, useEffect, useRef, useState, type ReactNode, type FocusEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { Trash2, ChevronUp, ChevronDown } from 'lucide-react'
+import { Trash2, ChevronUp, ChevronDown, X } from 'lucide-react'
 import type { ResumeDocument } from '@/types/document'
 import type { TemplateConfig } from '@/types/template'
 import { currentYearMonth, entryDateOptions, formatDateRange, formatDate, htmlEscape, htmlToText, safeHref, sectionDateOptions, uid } from '@/lib/utils'
@@ -376,10 +376,90 @@ function Bullets({
     )
   }
   const stop = (e: { preventDefault: () => void }) => e.preventDefault()
+  // Swap a bullet with its neighbour through the same setter the field
+  // writes with, so every list that renders here can reorder without its own
+  // handler. The focused field is left first: a focused editable keeps its
+  // DOM text over new props, which would show the old order in it.
+  const move = (bi: number, dir: -1 | 1) => {
+    const to = bi + dir
+    if (!edit || !setItem || to < 0 || to >= items.length) return
+    const a = items[bi]
+    const b = items[to]
+    deleting.current = true
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    edit((c) => {
+      setItem(c, bi, b)
+      setItem(c, to, a)
+    })
+    deleting.current = false
+    pendingFocus.current = to
+  }
   return (
     <ul className="rm-bullets rm-bullets-edit" ref={ulRef} onBlur={onListBlur}>
       {items.map((h, bi) => (
-        <li key={bi} className="rm-bullet-row">
+        <li
+          key={bi}
+          className="rm-bullet-row"
+          onKeyDown={(e) => {
+            if (!e.altKey || !e.shiftKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return
+            e.preventDefault()
+            move(bi, e.key === 'ArrowUp' ? -1 : 1)
+          }}
+        >
+          {/* The tools come BEFORE the text, though they sit after it
+              on the page (absolute, right and top set). After the text it was
+              still a box in the line, and with justified text a bullet's last
+              line was no longer its last: "actually ... booked." stretched
+              across the whole measure on the canvas, measured on 63 of 75
+              designs (2026-10-24). */}
+          {onRemove && (
+            // One quiet cluster past the line's end: move up, move down,
+            // remove. Neutral at rest so it never reads as the résumé's own
+            // ink; only remove turns red, and only under the pointer.
+            <span className="rm-bullet-tools no-print" contentEditable={false}>
+              <button
+                type="button"
+                className="rm-bullet-tool"
+                onMouseDown={stop}
+                onClick={() => move(bi, -1)}
+                disabled={bi === 0}
+                aria-label="Move bullet up"
+                title="Move up (Alt+Shift+↑)"
+              >
+                <ChevronUp aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="rm-bullet-tool"
+                onMouseDown={stop}
+                onClick={() => move(bi, 1)}
+                disabled={bi === items.length - 1}
+                aria-label="Move bullet down"
+                title="Move down (Alt+Shift+↓)"
+              >
+                <ChevronDown aria-hidden />
+              </button>
+              <button
+                type="button"
+                className="rm-bullet-tool rm-bullet-del"
+                onMouseDown={stop}
+                onClick={() => {
+                  // Blur the focused bullet first: otherwise React keeps the focused
+                  // (index-keyed) editable's stale DOM text after the splice, so a
+                  // DIFFERENT bullet appears to vanish. The `deleting` guard stops the
+                  // resulting list-blur from also pruning (which would re-index `bi`).
+                  deleting.current = true
+                  ;(document.activeElement as HTMLElement | null)?.blur()
+                  onRemove(bi)
+                  deleting.current = false
+                }}
+                aria-label="Remove bullet"
+                title="Remove bullet"
+              >
+                <X aria-hidden />
+              </button>
+            </span>
+          )}
           <Ed
             edit={edit}
             value={h}
@@ -418,28 +498,6 @@ function Bullets({
             apply={(c, v) => setItem?.(c, bi, v)}
             placeholder="e.g. Cut deploy time 40% by automating the CI pipeline"
           />
-          {onRemove && (
-            <button
-              type="button"
-              className="rm-bullet-del no-print"
-              contentEditable={false}
-              onMouseDown={stop}
-              onClick={() => {
-                // Blur the focused bullet first: otherwise React keeps the focused
-                // (index-keyed) editable's stale DOM text after the splice, so a
-                // DIFFERENT bullet appears to vanish. The `deleting` guard stops the
-                // resulting list-blur from also pruning (which would re-index `bi`).
-                deleting.current = true
-                ;(document.activeElement as HTMLElement | null)?.blur()
-                onRemove(bi)
-                deleting.current = false
-              }}
-              aria-label="Remove bullet"
-              title="Remove bullet"
-            >
-              ×
-            </button>
-          )}
         </li>
       ))}
       {onAdd && (
@@ -1323,6 +1381,7 @@ function Work({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; opts?: 
               }}
               className="rm-item-loc"
               placeholder="Location"
+              optional
             />
           ) : null
         const position = (className?: string) => (
@@ -1411,6 +1470,7 @@ function Work({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; opts?: 
                     c.work[i].summary = v
                   }}
                   placeholder="Brief role overview — scope, team, mission (optional)"
+                  optional
                 />
               </div>
             ) : null}
@@ -1503,6 +1563,7 @@ function Education({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
               }}
               className="rm-item-loc"
               placeholder="Location"
+              optional
             />
           ) : null
         // Degree + field are BOTH on the canvas (they both print) -
@@ -1518,7 +1579,7 @@ function Education({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
               }}
               placeholder="Degree — e.g. B.S."
             />
-            <span aria-hidden>{', '}</span>
+            <span className="rm-sep" aria-hidden>{', '}</span>
             <Ed
               edit={edit}
               value={e.area}
@@ -1526,6 +1587,7 @@ function Education({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
                 c.education[i].area = v
               }}
               placeholder="Field — e.g. Computer Science"
+              optional
             />
           </>
         ) : null
@@ -1609,6 +1671,7 @@ function Education({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
                   }}
                   className="rm-item-score"
                   placeholder="GPA"
+                  optional
                 />
               ) : null}
               {dateInSub(opts) && when ? <SubDate>{when}</SubDate> : null}
@@ -1623,6 +1686,7 @@ function Education({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
                 rich
                 multiline
                 placeholder="Summary"
+                optional
               />
             ) : null}
             {e.courses?.length ? (
@@ -2843,6 +2907,7 @@ function Awards({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; opts?
                 // of the awarder line ("Vertex LabsTop 2% of ...").
                 as="div"
                 placeholder="Summary"
+                optional
               />
             ) : null}
             <ItemMove edit={edit} sectionKey="awards" id={a.id} label={ADD_LABEL.awards} />
@@ -2959,6 +3024,7 @@ function Publications({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn;
                 // Same as an award: its own block, or it joins the publisher.
                 as="div"
                 placeholder="Summary"
+                optional
               />
             ) : null}
             <ItemMove edit={edit} sectionKey="publications" id={p.id} label={ADD_LABEL.publications} />
@@ -3063,6 +3129,7 @@ function Volunteer({ doc, edit, opts }: { doc: ResumeDocument; edit?: EditFn; op
                 rich
                 multiline
                 placeholder="Summary"
+                optional
               />
             ) : null}
             {show(opts?.showBullets) ? (
@@ -3256,6 +3323,7 @@ function Custom({
               }}
               className="rm-item-loc"
               placeholder="Location"
+              optional
             />
           ) : null
         const name = (className?: string) => (
@@ -3402,33 +3470,26 @@ function Custom({
 }
 
 /** Canvas-only "+ Add <entry>" row, mirroring the Bullets add-row. Lets the user
- *  add the first/next item to a section directly on the page (never printed). */
-function AddEntry({ sectionKey, edit }: { sectionKey: string; edit: EditFn }) {
+ *  add the first/next item to a section directly on the page (never printed).
+ *
+ *  In an empty section it is the section's only line and stays up at rest:
+ *  it replaced an italic "Empty sections are not exported" under every
+ *  empty heading, which told a first-timer what would NOT happen three times
+ *  over and never what to do. That fact moved to its tooltip. */
+function AddEntry({ sectionKey, edit, first }: { sectionKey: string; edit: EditFn; first?: boolean }) {
   const label = ADD_LABEL[sectionKey] ?? 'entry'
   return (
-    <div className="rm-add-entry-row no-print" contentEditable={false}>
+    <div className={`rm-add-entry-row no-print${first ? ' is-first' : ''}`} contentEditable={false}>
       <button
         type="button"
         className="rm-add-btn"
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => edit((c) => pushNewItem(c, sectionKey))}
-        title={`Add ${label}`}
+        title={first ? `Add ${label}. An empty section is left out of the PDF.` : `Add ${label}`}
       >
         + Add {label}
       </button>
     </div>
-  )
-}
-
-/** Discoverability hint under a section that hasn't got real content yet — the
- *  ghost placeholder text (Title, Publisher, …) looks like a normal entry, so
- *  this makes clear it's not what will show up in the exported PDF. Canvas-only,
- *  one muted line, never affects layout in print/thumbnail (no `edit` there). */
-function EmptyHint() {
-  return (
-    <p className="rm-empty-hint no-print" contentEditable={false}>
-      Empty sections are not exported
-    </p>
   )
 }
 
@@ -3526,8 +3587,7 @@ export function SectionBody({
   return (
     <>
       {body}
-      {!sectionHasContent(sectionKey, doc.content) ? <EmptyHint /> : null}
-      <AddEntry sectionKey={sectionKey} edit={edit} />
+      <AddEntry sectionKey={sectionKey} edit={edit} first={!sectionHasContent(sectionKey, doc.content)} />
     </>
   )
 }

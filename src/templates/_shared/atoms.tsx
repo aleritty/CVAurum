@@ -286,6 +286,19 @@ export function linkWords(url?: string, label?: string, display: 'pretty' | 'ful
 }
 
 /**
+ * The words a profile SHOWS in the contact line (fork order, see AR-MODS.md):
+ * the author's label, then the handle, then the network, and the address only
+ * when nothing else names the link.
+ */
+export function profileWords(
+  p: { label?: string; username?: string; network?: string; url?: string },
+  display: 'pretty' | 'full' | 'short' = 'pretty'
+): string {
+  const handle = (p.username || '').replace(/^@+/, '')
+  return p.label?.trim() || handle || p.network || prettyUrl(p.url, display)
+}
+
+/**
  * Normalize an email for display: decode stray percent-encoding (e.g. a pasted
  * "%7C" pipe), drop a `mailto:` prefix, and extract the address token if the
  * stored value has surrounding junk. Falls back to a trimmed, leading-symbol-

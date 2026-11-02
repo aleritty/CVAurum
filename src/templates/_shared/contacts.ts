@@ -1,6 +1,6 @@
 import type { ResumeDocument } from '@/types/document'
 import { safeHref } from '@/lib/utils'
-import { cleanEmail, prettyUrl } from './atoms'
+import { cleanEmail, prettyUrl, profileWords } from './atoms'
 import { resolveOrder } from '@/lib/sections'
 
 /**
@@ -85,14 +85,8 @@ export function contactLines(doc: ResumeDocument): ContactLine[] {
   }
 
   for (const p of b.profiles ?? []) {
-    // Keep profiles legible even when the design hides icons: prefer the clean
-    // URL (so one network is told from another), else "Network · handle"
-    // rather than a bare, ambiguous username.
     const handle = (p.username || '').replace(/^@+/, '')
-    const text =
-      p.label?.trim() ||
-      prettyUrl(p.url, disp) ||
-      (p.network ? (handle ? `${p.network} · ${handle}` : p.network) : handle)
+    const text = profileWords(p, disp)
     if (text && (p.url?.trim() || handle)) {
       out.push({ key: p.id ?? `${p.network}-${handle}`, kind: 'profile', text, href: safeHref(p.url), network: p.network, icon: p.icon })
     }

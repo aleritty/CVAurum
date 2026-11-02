@@ -299,7 +299,7 @@ function Profiles({ doc }: { doc: ResumeDocument }) {
                 className="input mt-1.5 w-full"
                 value={p.label ?? ''}
                 aria-label="Shown as"
-                placeholder="Leave empty to show the address"
+                placeholder="Leave empty to show the username or network"
                 onChange={(e) =>
                   update((c) => {
                     c.basics.profiles![i].label = e.target.value

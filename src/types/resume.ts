@@ -21,19 +21,32 @@ export const LocationSchema = z.object({
   region: z.string().optional(),
 })
 
-export const ProfileSchema = z.object({
-  id: z.string().optional(),
-  network: z.string().optional().default(''),
-  username: z.string().optional().default(''),
-  url: z.string().optional().default(''),
-  /** What the reader SEES for this link. Empty means "derive it from the URL",
-   *  which is what every profile did before: the displayed text was the
-   *  address, so wanting to show "Portfolio" instead was simply not possible,
-   *  and editing the text on the canvas overwrote the address itself. */
-  label: z.string().optional(),
-  /** An explicit icon choice, overriding the guess made from `network`. */
-  icon: z.string().optional(),
-})
+/**
+ * DA RIMUOVERE IN FUTURO: the fork's profiles stored their display words in
+ * `text`. Carries them over to `label`, and an existing label wins. Remove once
+ * every stored or exported résumé has been saved again (see AR-MODS.md).
+ */
+function migrateProfileText(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || !('text' in raw)) return raw
+  const { text, ...profile } = raw as Record<string, unknown>
+  const hasLabel = typeof profile.label === 'string' && profile.label.trim()
+  return !hasLabel && typeof text === 'string' && text.trim() ? { ...profile, label: text } : profile
+}
+
+export const ProfileSchema = z.preprocess(
+  migrateProfileText,
+  z.object({
+    id: z.string().optional(),
+    network: z.string().optional().default(''),
+    username: z.string().optional().default(''),
+    url: z.string().optional().default(''),
+    /** What the reader SEES for this link. Empty falls back to the handle, the
+     *  network, then the address (profileWords in atoms.tsx). */
+    label: z.string().optional(),
+    /** An explicit icon choice, overriding the guess made from `network`. */
+    icon: z.string().optional(),
+  })
+)
 
 export const BasicsSchema = z.object({
   name: z.string().default(''),

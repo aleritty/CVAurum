@@ -23,6 +23,8 @@ check src/lib/pdf/paint.ts 'chromePrefixes' 'sfondo colonna PDF'
 check src/templates/templates.css '.tpl-clarity .rm-contacts a:hover' 'link Clarity'
 check vite.config.ts 'usePolling: true' 'polling Vite'
 check package.json '"allowScripts"' 'allowScripts'
+check src/templates/_shared/atoms.tsx 'handle || p.network || prettyUrl' 'ordine testo profili'
+check src/types/resume.ts 'migrateProfileText' 'conversione text -> label'
 ```
 
 Ogni riga deve iniziare con `ok`. I `grep` dicono solo che il codice c'è: per le mod visive fai anche la prova manuale indicata sotto.
@@ -88,11 +90,27 @@ Istruzioni per gli agenti, che upstream non traccia.
 
 - **Verifica:** `git ls-files AGENTS.md CLAUDE.md` deve elencare entrambi i file.
 
+### 9. Ordine del testo dei link dei profili
+
+Nella riga dei contatti il testo è, nell'ordine: `label` ("Shown as"), username, network e solo alla fine l'indirizzo. Upstream mette l'indirizzo subito dopo `label`. L'ordine vale per canvas, PDF, testo ATS e Word. In Word il testo non ha più il prefisso `Network:`, così coincide con la pagina.
+
+- **File:** `src/templates/_shared/atoms.tsx` (`profileWords`), usata da `contacts.ts`, `Artboard.tsx` e `src/lib/docx.ts`
+- **Test automatico:** `npx vitest run src/templates/_shared/profileWords.test.ts`
+- **Prova manuale:** su un profilo con username e URL, lascia vuoto "Shown as": sul curriculum compare lo username.
+
+### 10. Conversione da `text` a `label` (da rimuovere in futuro)
+
+I profili salvati con il vecchio campo `text` vengono convertiti in `label` a ogni lettura dello schema, quindi anche importando un JSON. Se `label` è già impostato, resta quello.
+
+- **File:** `src/types/resume.ts` (`migrateProfileText`, marcata `DA RIMUOVERE IN FUTURO`)
+- **Test automatico:** `npx vitest run src/templates/_shared/profileWords.test.ts`
+- **Rimozione:** quando tutti i curriculum e i JSON esportati sono stati salvati di nuovo, togli la funzione, il suo `z.preprocess` e il relativo blocco di test. Trovi tutto con `grep -rn "DA RIMUOVERE IN FUTURO" src`.
+
 ## Modifiche non più attive
 
 Queste modifiche di `793a02f` non sono nel codice attuale:
 
-- **Testo visualizzato dei profili (persa):** il campo `text` e i due input separati "Display text" e URL sono usciti con il merge `3ba550e`, che ha preso upstream per intero. Upstream non ha un equivalente. Per recuperarla si riparte da `git show 793a02f`.
+- **Testo visualizzato dei profili (sostituita):** ora c'è il campo `label` di upstream (`22760b6`), impostabile da "Shown as" nel pannello dei profili e, per il sito, da "Website shown as" (`urlLabel`). L'ordine di fallback e la conversione del vecchio campo `text` sono le mod 9 e 10.
 - **Foto centrata (sostituita):** ora `.rm-visual-wrap` è gestita da upstream con margini configurabili.
 
 Anche i link cliccabili nei PDF di `4768d34` non servono più come modifica del fork: upstream ora li gestisce in `src/lib/pdf/links.ts`.

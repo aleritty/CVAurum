@@ -46,7 +46,7 @@ import {
   safeHref,
   sectionDateOptions,
 } from '@/lib/utils'
-import { prettyUrl, cleanEmail, linkWords } from '@/templates/_shared/atoms'
+import { prettyUrl, profileWords, cleanEmail, linkWords } from '@/templates/_shared/atoms'
 import { artBandSrc } from '@/templates/_shared/headerStyles'
 import { getTemplate } from '@/templates/registry'
 import { lighten, readableOn } from '@/lib/elementColors'
@@ -956,9 +956,7 @@ function buildHeader(doc: ResumeDocument, C: Ctx, separator: string, width: numb
   const linkDisplay = doc.metadata.links?.display
   if (b.url) contacts.push({ words: linkWords(b.url, b.urlLabel, linkDisplay), url: b.url })
   for (const p of b.profiles ?? []) {
-    const handle = linkWords(p.url, p.label, linkDisplay) || p.username
-    if (handle && p.network) contacts.push({ words: `${p.network}: ${handle}`, url: p.url })
-    else if (handle || p.network) contacts.push({ words: handle || p.network, url: p.url })
+    contacts.push({ words: profileWords(p, linkDisplay), url: p.url })
   }
   const shown = contacts.filter((c) => c.words)
   // What sits between two contacts is the author's choice, printed with the

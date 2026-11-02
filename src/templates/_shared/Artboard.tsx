@@ -35,7 +35,7 @@ import { applyKeywordFit, fitHeadingWords, refitWhenFontsReady } from '@/lib/pdf
 import { alignAsideVisualToMain } from './asideVisualAlign'
 import { settleLooseLines } from '@/lib/pdf/looseLines'
 import { SectionBody } from './sections'
-import { CONTACT_ICON_CHOICES, ContactIcons, contactIcon, prettyUrl, cleanEmail, Deco } from './atoms'
+import { CONTACT_ICON_CHOICES, ContactIcons, contactIcon, prettyUrl, profileWords, cleanEmail, Deco } from './atoms'
 import { Ed, EdMeta, type EditFn, type MetaEditFn } from './Editable'
 import { LinkButton } from './LinkButton'
 import { SectionGear } from './SectionGear'
@@ -953,10 +953,7 @@ function EditableContacts({
       {(b.profiles ?? []).map((p, i) => {
         const Icon = contactIcon(p.network, p.icon)
         const handle = (p.username || '').replace(/^@+/, '')
-        const text =
-          p.label?.trim() ||
-          prettyUrl(p.url) ||
-          (p.network ? (handle ? `${p.network} · ${handle}` : p.network) : handle)
+        const text = profileWords(p)
         // Editable on the canvas at last - a profile link used to be a plain
         // span, so its text could only be changed by editing the URL in the
         // side panel, which is not the same thing at all.
